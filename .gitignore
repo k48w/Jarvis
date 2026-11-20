@@ -1,0 +1,20 @@
+# Dependencies & build outputs
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+.vercel
+
+# Logs & OS junk
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secrets & local env
+.env
+.env.*
+secrets.json
+
+# Heavy local demo recordings
+docs/*.mp4

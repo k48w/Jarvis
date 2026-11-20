@@ -1,0 +1,29 @@
+{
+  "name": "jarvis-cinematic",
+  "version": "8.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5173 --strictPort",
+    "build": "tsc --noEmit && vite build",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@fontsource-variable/space-grotesk": "^5",
+    "@react-three/fiber": "^9",
+    "@tauri-apps/api": "^2.12.5",
+    "lucide-react": "^0.468.0",
+    "react": "^19",
+    "react-dom": "^19",
+    "three": "0.180.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/three": "^0.180.0",
+    "playwright-core": "^1.65.1",
+    "typescript": "^5.8",
+    "vite": "^6"
+  }
+}

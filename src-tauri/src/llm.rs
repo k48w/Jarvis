@@ -1,0 +1,1189 @@
+use crate::config::{
+    get_api_key, save_config_file, AppConfig, GeminiAuthMode, KeySlot, Provider, SttEngine,
+};
+use crate::google_oauth;
+use crate::oauth;
+use crate::state::AppState;
+use crate::storage::{self, MemoryItem, StoredMessage, ToolTrace};
+use crate::tools;
+use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::Instant;
+use tauri::{AppHandle, Emitter};
+use tokio::sync::watch;
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionTestResult {
+    pub ok: bool,
+    pub message: String,
+    pub latency_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImageAttachment {
+    pub mime_type: String,
+    pub data_base64: String,
+}
+
+#[derive(Default)]
+struct ResponseCallAcc {
+    call_id: String,
+    name: String,
+    arguments: String,
+}
+
+fn build_system_prompt(
+    cfg: &AppConfig,
+    memories: &[MemoryItem],
+    project_path: Option<&str>,
+) -> String {
+    let mut prompt = cfg.system_prompt.trim().to_string();
+    let mode_note = match cfg.permission_mode {
+        crate::config::PermissionMode::Auto => {
+            "Modo de permissão atual: Permissão Total. Ferramentas de sistema, busca e ações locais no PC são executadas automaticamente."
+        }
+        crate::config::PermissionMode::Review => {
+            "Modo de permissão atual: Revisão Automática. Leitura/pesquisa executam automaticamente; ações que alteram o PC pedem confirmação do usuário."
+        }
+        crate::config::PermissionMode::Safe => {
+            "Modo de permissão atual: Somente Conversa. Ações locais no PC e leitura de hardware estão desativadas."
+        }
+    };
+    prompt.push_str("\n\n");
+    prompt.push_str(mode_note);
+    prompt.push_str(
+        "\n\nNavegador embutido autônomo: você possui controle real sobre o navegador Chromium 60fps integrado do J.A.R.V.I.S. (browser_navigate, browser_inspect, browser_click, browser_type, browser_scroll, browser_press_key, browser_back, browser_close). Sempre que o usuário pedir para abrir o navegador ou consultar/agir em qualquer site (como WhatsApp Web, YouTube, Google, GitHub, lojas), chame browser_navigate — o painel dividido do navegador abrirá automaticamente ao lado da conversa. Use browser_close apenas quando o usuário pedir para fechar.\n\nVisão inteligente de tela e janelas/jogos do Windows: você NÃO precisa pedir print ao usuário. Quando ele pedir para ver um programa ou jogo específico (ex.: 'olha meu jogo', 'vê o Firefox', 'olha o Discord', 'vê o VS Code'), primeiro entenda QUAL janela ele quer ver: se você não souber o nome exato do jogo/app aberto, chame list_open_windows para descobrir a janela certa e então chame see_screen(target_window: \"<nome>\") — isso captura aquela janela/jogo diretamente mesmo quando o usuário está com o navegador ou outro app aberto por cima! Use see_screen sem target_window apenas quando o usuário perguntar de forma genérica o que está na tela atual. Se ele pedir para clicar/digitar no app, use screen_click / screen_type / screen_hotkey.\n\nSubagentes paralelos: para tarefas longas, pesquisas profundas ou trabalho paralelo, use spawn_agent(role, name, task) — isso cria automaticamente a aba Agentes para o usuário acompanhar ao vivo.\n\nArquivos locais: você também pode listar, ler, buscar, criar e editar arquivos reais do computador usando list_files, read_file, search_files, write_file e edit_file (sempre leia o arquivo antes de editar um trecho; todas as edições aparecem com diff visual e botão de desfazer para o usuário).\n\nÁrea de transferência (Ctrl+C): quando o usuário disser 'o que eu copiei', 'analisa meu Ctrl+C', 'lê o print que copiei' ou 'área de transferência', chame read_clipboard para ler automaticamente o texto ou a imagem copiada.",
+    );
+
+    if cfg.tts_engine == crate::config::TtsEngine::Elevenlabs
+        && cfg.tts_reply_mode != crate::config::TtsReplyMode::Full
+    {
+        prompt.push_str(
+            "\n\nEconomia de voz ativa: apenas a sua PRIMEIRA frase curta (máximo 120 caracteres) será sintetizada em voz alta. Portanto: 1) Para cumprimentos, confirmações e perguntas simples, responda em uma única frase curta de até 12 palavras. 2) Quando precisar dar uma resposta longa ou técnica, faça a primeira frase ser um resumo curto e completo (ex.: 'Aqui está o resumo, senhor; deixei os detalhes na tela.') e coloque o restante abaixo.",
+        );
+    }
+
+    if let Some(pp) = project_path.map(str::trim).filter(|s| !s.is_empty()) {
+        prompt.push_str("\n\nProjeto vinculado a esta conversa:\n- Pasta raiz: ");
+        prompt.push_str(pp);
+        prompt.push_str(
+            "\nQuando o usuário se referir a arquivos ou código do projeto, use este caminho como base nas ferramentas list_files, read_file, search_files, write_file e edit_file.",
+        );
+        if let Ok(entries) = std::fs::read_dir(pp) {
+            let mut items: Vec<String> = entries
+                .flatten()
+                .take(35)
+                .map(|e| {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    if e.path().is_dir() {
+                        format!("{name}/")
+                    } else {
+                        name
+                    }
+                })
+                .collect();
+            items.sort();
+            if !items.is_empty() {
+                prompt.push_str("\n- Itens na raiz do projeto: ");
+                prompt.push_str(&items.join(", "));
+            }
+        }
+    }
+
+    if !memories.is_empty() {
+        prompt.push_str("\n\nMemórias persistentes sobre o usuário:\n");
+        for item in memories.iter().take(40) {
+            prompt.push_str("- ");
+            prompt.push_str(&item.content);
+            prompt.push('\n');
+        }
+    }
+    prompt
+}
+
+fn emit_delta(app: &AppHandle, conv_id: &str, text: &str) {
+    if !text.is_empty() {
+        let _ = app.emit(
+            "jarvis:chat-event",
+            json!({
+                "type": "delta",
+                "conversationId": conv_id,
+                "text": text
+            }),
+        );
+    }
+}
+
+fn check_cancelled(cancel_rx: &watch::Receiver<bool>) -> Result<(), String> {
+    if *cancel_rx.borrow() {
+        Err("CANCELLED".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+enum GeminiAuth {
+    ApiKey(String),
+    OAuth {
+        token: String,
+        project_id: Option<String>,
+    },
+}
+
+impl GeminiAuth {
+    fn apply(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match self {
+            GeminiAuth::ApiKey(key) => req.header("x-goog-api-key", key),
+            GeminiAuth::OAuth { token, project_id } => {
+                let req = req.bearer_auth(token);
+                if let Some(pid) = project_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                    req.header("x-goog-user-project", pid)
+                } else {
+                    req
+                }
+            }
+        }
+    }
+}
+
+async fn resolve_gemini_auth(
+    state: &Arc<AppState>,
+    cfg: &AppConfig,
+) -> Result<GeminiAuth, String> {
+    if cfg.gemini_auth_mode == GeminiAuthMode::Oauth {
+        let (token, session_proj) =
+            google_oauth::get_valid_google_token(&state.http, &state.data_dir).await?;
+        let project_id = if !cfg.google_oauth_project_id.trim().is_empty() {
+            Some(cfg.google_oauth_project_id.trim().to_string())
+        } else {
+            session_proj
+        };
+        Ok(GeminiAuth::OAuth { token, project_id })
+    } else {
+        let key = get_api_key(&state.data_dir, KeySlot::Gemini).ok_or_else(|| {
+            "Chave da API Gemini não configurada. Abra Ajustes → IA para adicionar sua chave ou usar Conta Google (OAuth)."
+                .to_string()
+        })?;
+        Ok(GeminiAuth::ApiKey(key))
+    }
+}
+
+async fn run_gemini(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    conv_id: &str,
+    cfg: &AppConfig,
+    auth: &GeminiAuth,
+    system_prompt: &str,
+    history: &[StoredMessage],
+    latest_image: Option<&ImageAttachment>,
+    cancel_rx: &mut watch::Receiver<bool>,
+    tool_traces: &mut Vec<ToolTrace>,
+    response_mode: &mut String,
+) -> Result<String, String> {
+    let valid_history: Vec<&StoredMessage> = history
+        .iter()
+        .filter(|m| !m.text.trim().is_empty())
+        .collect();
+    let last_user_idx = valid_history.iter().rposition(|m| m.role == "user");
+
+    let mut contents: Vec<Value> = valid_history
+        .iter()
+        .enumerate()
+        .map(|(idx, m)| {
+            let role = if m.role == "user" { "user" } else { "model" };
+            let mut parts = vec![json!({ "text": m.text })];
+            if Some(idx) == last_user_idx {
+                if let Some(img) = latest_image {
+                    parts.push(json!({
+                        "inline_data": {
+                            "mime_type": img.mime_type,
+                            "data": img.data_base64
+                        }
+                    }));
+                }
+            }
+            json!({
+                "role": role,
+                "parts": parts
+            })
+        })
+        .collect();
+
+    let decls = tools::gemini_tool_declarations(cfg.permission_mode, cfg.web_search_enabled);
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?alt=sse",
+        cfg.gemini_model.trim()
+    );
+
+    let mut full_text = String::new();
+
+    for _round in 0..14 {
+        check_cancelled(cancel_rx)?;
+
+        let mut payload = json!({
+            "system_instruction": { "parts": [{ "text": system_prompt }] },
+            "contents": contents
+        });
+        if !decls.is_empty() {
+            payload["tools"] = Value::Array(decls.clone());
+        }
+
+        let req = auth.apply(state.http.post(&url)).json(&payload);
+        let resp = tokio::select! {
+            _ = cancel_rx.changed() => return Err("CANCELLED".to_string()),
+            r = req.send() => {
+                r.map_err(|e| format!("Erro de rede ao conectar no Gemini: {e}"))?
+            }
+        };
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let err_body = resp.text().await.unwrap_or_default();
+            return Err(format!("Gemini retornou erro ({status}): {err_body}"));
+        }
+
+        let mut stream = resp.bytes_stream();
+        let mut buf = String::new();
+        let mut round_text = String::new();
+        let mut model_parts: Vec<Value> = Vec::new();
+        let mut function_calls: Vec<(String, Value)> = Vec::new();
+
+        loop {
+            let next_chunk = tokio::select! {
+                _ = cancel_rx.changed() => return Err("CANCELLED".to_string()),
+                c = stream.next() => c
+            };
+            let Some(chunk_res) = next_chunk else { break };
+            let chunk = chunk_res.map_err(|e| format!("Erro no streaming do Gemini: {e}"))?;
+            buf.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(nl) = buf.find('\n') {
+                let line = buf[..nl].trim_end_matches('\r').to_string();
+                buf.drain(..=nl);
+                let Some(data) = line.strip_prefix("data:") else {
+                    continue;
+                };
+                let data = data.trim();
+                if data.is_empty() || data == "[DONE]" {
+                    continue;
+                }
+                let Ok(parsed) = serde_json::from_str::<Value>(data) else {
+                    continue;
+                };
+                let Some(parts) = parsed["candidates"][0]["content"]["parts"].as_array() else {
+                    continue;
+                };
+                for part in parts {
+                    if let Some(fc) = part.get("functionCall") {
+                        let name = fc["name"].as_str().unwrap_or("").to_string();
+                        let args = fc.get("args").cloned().unwrap_or_else(|| json!({}));
+                        model_parts.push(part.clone());
+                        function_calls.push((name, args));
+                    } else if let Some(text) = part["text"].as_str() {
+                        if part["thought"].as_bool() == Some(true) {
+                            continue;
+                        }
+                        if !full_text.is_empty() && round_text.is_empty() && !full_text.ends_with(['\n', ' ']) {
+                            emit_delta(app, conv_id, "\n\n");
+                            full_text.push_str("\n\n");
+                        }
+                        round_text.push_str(text);
+                        full_text.push_str(text);
+                        emit_delta(app, conv_id, text);
+                    }
+                }
+            }
+        }
+
+        if function_calls.is_empty() {
+            break;
+        }
+
+        if !round_text.is_empty() {
+            model_parts.insert(0, json!({ "text": round_text }));
+        }
+        contents.push(json!({ "role": "model", "parts": model_parts }));
+
+        let mut response_parts = Vec::new();
+        for (name, args) in function_calls {
+            check_cancelled(cancel_rx)?;
+            let call_id = Uuid::new_v4().to_string();
+            let outcome =
+                tools::execute_tool_with_policy(app, state, conv_id, &call_id, &name, &args).await;
+            if outcome.triggered_alert {
+                *response_mode = "alert".to_string();
+            }
+            let title = tools::find_spec(&name)
+                .map(|s| s.title.to_string())
+                .unwrap_or_else(|| name.clone());
+            tool_traces.push(ToolTrace {
+                id: call_id,
+                name: name.clone(),
+                title,
+                status: outcome.status,
+                summary: outcome.summary,
+            });
+            response_parts.push(json!({
+                "functionResponse": {
+                    "name": name,
+                    "response": { "result": outcome.output }
+                }
+            }));
+            if let Some(img) = outcome.attached_image {
+                response_parts.push(json!({
+                    "inline_data": {
+                        "mime_type": img.mime_type,
+                        "data": img.data_base64
+                    }
+                }));
+            }
+        }
+        contents.push(json!({ "role": "user", "parts": response_parts }));
+    }
+
+    Ok(full_text)
+}
+
+async fn run_openai_responses(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    conv_id: &str,
+    cfg: &AppConfig,
+    system_prompt: &str,
+    history: &[StoredMessage],
+    latest_image: Option<&ImageAttachment>,
+    cancel_rx: &mut watch::Receiver<bool>,
+    tool_traces: &mut Vec<ToolTrace>,
+    response_mode: &mut String,
+) -> Result<String, String> {
+    let token = oauth::get_valid_access_token(&state.http, &state.data_dir).await?;
+    let valid_history: Vec<&StoredMessage> = history
+        .iter()
+        .filter(|m| !m.text.trim().is_empty())
+        .collect();
+    let last_user_idx = valid_history.iter().rposition(|m| m.role == "user");
+
+    let mut input: Vec<Value> = valid_history
+        .iter()
+        .enumerate()
+        .map(|(idx, m)| {
+            let role = if m.role == "user" { "user" } else { "assistant" };
+            if Some(idx) == last_user_idx {
+                if let Some(img) = latest_image {
+                    return json!({
+                        "role": role,
+                        "content": [
+                            { "type": "input_text", "text": m.text },
+                            {
+                                "type": "input_image",
+                                "image_url": format!("data:{};base64,{}", img.mime_type, img.data_base64)
+                            }
+                        ]
+                    });
+                }
+            }
+            json!({
+                "role": role,
+                "content": m.text
+            })
+        })
+        .collect();
+
+    let decls = tools::responses_tool_declarations(cfg.permission_mode, cfg.web_search_enabled);
+    let url = "https://api.openai.com/v1/responses";
+    let mut full_text = String::new();
+    let mut active_model = if cfg.chatgpt_model.trim().is_empty() {
+        "gpt-6.2-sol".to_string()
+    } else {
+        cfg.chatgpt_model.trim().to_string()
+    };
+    let mut persisted_model = cfg.chatgpt_model.trim().to_string();
+    let mut rejected_models: Vec<String> = Vec::new();
+    let mut cached_catalog: Option<Vec<String>> = None;
+
+    for _round in 0..14 {
+        check_cancelled(cancel_rx)?;
+
+        let mut resp_opt = None;
+        for _attempt in 0..3 {
+            let mut payload = json!({
+                "model": active_model,
+                "instructions": system_prompt,
+                "input": input,
+                "stream": true,
+                "store": false
+            });
+            if !decls.is_empty() {
+                payload["tools"] = Value::Array(decls.clone());
+            }
+
+            let resp = tokio::select! {
+                _ = cancel_rx.changed() => return Err("CANCELLED".to_string()),
+                r = state.http.post(url).bearer_auth(&token).json(&payload).send() => {
+                    r.map_err(|e| format!("Erro de rede ao conectar ao ChatGPT: {e}"))?
+                }
+            };
+
+            if resp.status().is_success() {
+                resp_opt = Some(resp);
+                break;
+            }
+
+            let status = resp.status();
+            let err_body = resp.text().await.unwrap_or_default();
+            let lower_err = err_body.to_ascii_lowercase();
+            let unsupported_model = status.as_u16() == 400
+                && (lower_err.contains("model_not_found")
+                    || lower_err.contains("is not supported"));
+            if unsupported_model {
+                rejected_models.push(active_model.clone());
+                if cached_catalog.is_none() {
+                    cached_catalog = Some(
+                        oauth::list_chatgpt_models_with_token(&state.http, &token)
+                            .await
+                            .unwrap_or_default(),
+                    );
+                }
+                let catalog = cached_catalog.as_deref().unwrap_or(&[]);
+                let next_model = oauth::pick_best_chatgpt_model(catalog, &rejected_models);
+                if next_model != active_model
+                    && !rejected_models
+                        .iter()
+                        .any(|r| r.eq_ignore_ascii_case(&next_model))
+                {
+                    active_model = next_model;
+                    continue;
+                }
+            }
+            return Err(format!(
+                "ChatGPT (Responses API) retornou erro ({status}): {err_body}"
+            ));
+        }
+
+        let resp = resp_opt.ok_or_else(|| {
+            "Nenhum modelo compatível do ChatGPT disponível para esta conta.".to_string()
+        })?;
+
+        if active_model != persisted_model {
+            persisted_model = active_model.clone();
+            let mut cfg_guard = state.config.write().await;
+            cfg_guard.chatgpt_model = active_model.clone();
+            let _ = save_config_file(&state.data_dir, &cfg_guard);
+            drop(cfg_guard);
+            let _ = app.emit(
+                "jarvis:chat-event",
+                json!({
+                    "type": "model_updated",
+                    "conversationId": conv_id,
+                    "provider": "chatgpt",
+                    "model": active_model
+                }),
+            );
+        }
+
+        let mut stream = resp.bytes_stream();
+        let mut buf = String::new();
+        let mut round_text = String::new();
+        let mut calls_by_key: BTreeMap<String, ResponseCallAcc> = BTreeMap::new();
+        let mut call_order: Vec<String> = Vec::new();
+
+        loop {
+            let next_chunk = tokio::select! {
+                _ = cancel_rx.changed() => return Err("CANCELLED".to_string()),
+                c = stream.next() => c
+            };
+            let Some(chunk_res) = next_chunk else { break };
+            let chunk = chunk_res.map_err(|e| format!("Erro no streaming do ChatGPT: {e}"))?;
+            buf.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(nl) = buf.find('\n') {
+                let line = buf[..nl].trim_end_matches('\r').to_string();
+                buf.drain(..=nl);
+                let Some(data) = line.strip_prefix("data:") else {
+                    continue;
+                };
+                let data = data.trim();
+                if data.is_empty() || data == "[DONE]" {
+                    continue;
+                }
+                let Ok(parsed) = serde_json::from_str::<Value>(data) else {
+                    continue;
+                };
+                let ev_type = parsed["type"].as_str().unwrap_or("");
+                match ev_type {
+                    "response.output_text.delta" => {
+                        if let Some(text) = parsed["delta"].as_str() {
+                            if !full_text.is_empty() && round_text.is_empty() && !full_text.ends_with(['\n', ' ']) {
+                                emit_delta(app, conv_id, "\n\n");
+                                full_text.push_str("\n\n");
+                            }
+                            round_text.push_str(text);
+                            full_text.push_str(text);
+                            emit_delta(app, conv_id, text);
+                        }
+                    }
+                    "response.output_item.added" => {
+                        let item = &parsed["item"];
+                        if item["type"].as_str() == Some("function_call") {
+                            let key = item["id"]
+                                .as_str()
+                                .map(str::to_string)
+                                .unwrap_or_else(|| format!("idx_{}", parsed["output_index"].as_u64().unwrap_or(0)));
+                            if !calls_by_key.contains_key(&key) {
+                                call_order.push(key.clone());
+                            }
+                            let entry = calls_by_key.entry(key).or_default();
+                            if let Some(cid) = item["call_id"].as_str() {
+                                entry.call_id = cid.to_string();
+                            }
+                            if let Some(name) = item["name"].as_str() {
+                                entry.name = name.to_string();
+                            }
+                            if let Some(args) = item["arguments"].as_str() {
+                                if !args.is_empty() {
+                                    entry.arguments = args.to_string();
+                                }
+                            }
+                        }
+                    }
+                    "response.function_call_arguments.delta" => {
+                        let key = parsed["item_id"]
+                            .as_str()
+                            .map(str::to_string)
+                            .unwrap_or_else(|| format!("idx_{}", parsed["output_index"].as_u64().unwrap_or(0)));
+                        if !calls_by_key.contains_key(&key) {
+                            call_order.push(key.clone());
+                        }
+                        let entry = calls_by_key.entry(key).or_default();
+                        if let Some(delta) = parsed["delta"].as_str() {
+                            entry.arguments.push_str(delta);
+                        }
+                    }
+                    "response.function_call_arguments.done" => {
+                        let key = parsed["item_id"]
+                            .as_str()
+                            .map(str::to_string)
+                            .unwrap_or_else(|| format!("idx_{}", parsed["output_index"].as_u64().unwrap_or(0)));
+                        if let Some(entry) = calls_by_key.get_mut(&key) {
+                            if let Some(args) = parsed["arguments"].as_str() {
+                                if !args.is_empty() {
+                                    entry.arguments = args.to_string();
+                                }
+                            }
+                        }
+                    }
+                    "response.output_item.done" => {
+                        let item = &parsed["item"];
+                        if item["type"].as_str() == Some("function_call") {
+                            let key = item["id"]
+                                .as_str()
+                                .map(str::to_string)
+                                .unwrap_or_else(|| format!("idx_{}", parsed["output_index"].as_u64().unwrap_or(0)));
+                            if !calls_by_key.contains_key(&key) {
+                                call_order.push(key.clone());
+                            }
+                            let entry = calls_by_key.entry(key).or_default();
+                            if let Some(cid) = item["call_id"].as_str() {
+                                entry.call_id = cid.to_string();
+                            }
+                            if let Some(name) = item["name"].as_str() {
+                                entry.name = name.to_string();
+                            }
+                            if let Some(args) = item["arguments"].as_str() {
+                                if !args.is_empty() {
+                                    entry.arguments = args.to_string();
+                                }
+                            }
+                        }
+                    }
+                    "response.failed" | "error" => {
+                        let msg = parsed["error"]["message"]
+                            .as_str()
+                            .or_else(|| parsed["response"]["error"]["message"].as_str())
+                            .unwrap_or("Falha na resposta do ChatGPT.");
+                        return Err(format!("ChatGPT retornou erro: {msg}"));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if call_order.is_empty() {
+            break;
+        }
+
+        if !round_text.is_empty() {
+            input.push(json!({ "role": "assistant", "content": round_text }));
+        }
+
+        let mut round_images: Vec<ImageAttachment> = Vec::new();
+        for key in call_order {
+            let Some(call) = calls_by_key.remove(&key) else { continue };
+            if call.name.is_empty() {
+                continue;
+            }
+            check_cancelled(cancel_rx)?;
+            let call_id = if call.call_id.is_empty() {
+                Uuid::new_v4().to_string()
+            } else {
+                call.call_id
+            };
+            let args_str = if call.arguments.is_empty() { "{}" } else { &call.arguments };
+            input.push(json!({
+                "type": "function_call",
+                "call_id": call_id,
+                "name": call.name,
+                "arguments": args_str
+            }));
+
+            let args: Value = serde_json::from_str(args_str).unwrap_or_else(|_| json!({}));
+            let outcome = tools::execute_tool_with_policy(
+                app,
+                state,
+                conv_id,
+                &call_id,
+                &call.name,
+                &args,
+            )
+            .await;
+            if outcome.triggered_alert {
+                *response_mode = "alert".to_string();
+            }
+            if let Some(img) = outcome.attached_image {
+                round_images.push(img);
+            }
+            let title = tools::find_spec(&call.name)
+                .map(|s| s.title.to_string())
+                .unwrap_or_else(|| call.name.clone());
+            tool_traces.push(ToolTrace {
+                id: call_id.clone(),
+                name: call.name,
+                title,
+                status: outcome.status,
+                summary: outcome.summary,
+            });
+            input.push(json!({
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": outcome.output
+            }));
+        }
+
+        for img in round_images {
+            input.push(json!({
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "Imagem visual capturada agora pela ferramenta de tela/navegador. Analise-a diretamente para responder ou agir:"
+                    },
+                    {
+                        "type": "input_image",
+                        "image_url": format!("data:{};base64,{}", img.mime_type, img.data_base64)
+                    }
+                ]
+            }));
+        }
+    }
+
+    Ok(full_text)
+}
+
+pub async fn run_chat_turn(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    conv_id: &str,
+    history: &[StoredMessage],
+    project_path: Option<String>,
+    latest_image: Option<ImageAttachment>,
+    mut cancel_rx: watch::Receiver<bool>,
+) -> Result<(String, String, Vec<ToolTrace>), String> {
+    let cfg = state.config.read().await.clone();
+    let memories = storage::list_memories(&state.data_dir).unwrap_or_default();
+    let system_prompt = build_system_prompt(&cfg, &memories, project_path.as_deref());
+
+    let window_start = history.len().saturating_sub(24);
+    let recent = &history[window_start..];
+
+    let mut tool_traces = Vec::new();
+    let mut response_mode = "responding".to_string();
+
+    let text = match cfg.provider {
+        Provider::Gemini => {
+            let auth = resolve_gemini_auth(state, &cfg).await?;
+            run_gemini(
+                app,
+                state,
+                conv_id,
+                &cfg,
+                &auth,
+                &system_prompt,
+                recent,
+                latest_image.as_ref(),
+                &mut cancel_rx,
+                &mut tool_traces,
+                &mut response_mode,
+            )
+            .await?
+        }
+        Provider::Chatgpt => {
+            run_openai_responses(
+                app,
+                state,
+                conv_id,
+                &cfg,
+                &system_prompt,
+                recent,
+                latest_image.as_ref(),
+                &mut cancel_rx,
+                &mut tool_traces,
+                &mut response_mode,
+            )
+            .await?
+        }
+    };
+
+    let final_text = if text.trim().is_empty() && !tool_traces.is_empty() {
+        "Concluído.".to_string()
+    } else {
+        text
+    };
+
+    Ok((final_text, response_mode, tool_traces))
+}
+
+pub async fn run_agent_turn(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    agent_id: &str,
+    role_prompt: &str,
+    task: &str,
+    mut cancel_rx: watch::Receiver<bool>,
+) -> Result<(String, String, Vec<ToolTrace>), String> {
+    let cfg = state.config.read().await.clone();
+    let memories = storage::list_memories(&state.data_dir).unwrap_or_default();
+
+    let mut system_prompt = format!(
+        "Você é um subagente especializado do ecossistema J.A.R.V.I.S. rodando em segundo plano no Windows.\n\
+         Função designada: {role_prompt}\n\
+         Entregue um resultado direto, bem estruturado em Markdown (com listas e blocos de código quando útil) em português do Brasil.\n\
+         Use as ferramentas disponíveis quando ajudarem a concluir a missão com precisão."
+    );
+    if !memories.is_empty() {
+        system_prompt.push_str("\n\nContexto do usuário:\n");
+        for item in memories.iter().take(20) {
+            system_prompt.push_str("- ");
+            system_prompt.push_str(&item.content);
+            system_prompt.push('\n');
+        }
+    }
+
+    let single_msg = [StoredMessage {
+        id: Uuid::new_v4().to_string(),
+        role: "user".to_string(),
+        text: task.to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        mode: None,
+        tool_events: Vec::new(),
+    }];
+
+    let mut tool_traces = Vec::new();
+    let mut response_mode = "responding".to_string();
+
+    let text = match cfg.provider {
+        Provider::Gemini => {
+            let auth = resolve_gemini_auth(state, &cfg).await?;
+            run_gemini(
+                app,
+                state,
+                agent_id,
+                &cfg,
+                &auth,
+                &system_prompt,
+                &single_msg,
+                None,
+                &mut cancel_rx,
+                &mut tool_traces,
+                &mut response_mode,
+            )
+            .await?
+        }
+        Provider::Chatgpt => {
+            run_openai_responses(
+                app,
+                state,
+                agent_id,
+                &cfg,
+                &system_prompt,
+                &single_msg,
+                None,
+                &mut cancel_rx,
+                &mut tool_traces,
+                &mut response_mode,
+            )
+            .await?
+        }
+    };
+
+    let final_text = if text.trim().is_empty() && !tool_traces.is_empty() {
+        "Missão concluída com sucesso.".to_string()
+    } else {
+        text
+    };
+
+    Ok((final_text, response_mode, tool_traces))
+}
+
+pub fn spawn_background_agent(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    role: &str,
+    name: Option<&str>,
+    task: &str,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send>> {
+    let app_owned = app.clone();
+    let state_owned = Arc::clone(state);
+    let role_owned = role.to_string();
+    let name_owned = name.map(str::to_string);
+    let task_owned = task.to_string();
+
+    Box::pin(async move {
+        let app = &app_owned;
+        let state = &state_owned;
+        let role = role_owned.as_str();
+        let name = name_owned.as_deref();
+        let task = task_owned.as_str();
+
+        let clean_task = task.trim().to_string();
+        if clean_task.is_empty() {
+            return Err("Descreva a missão do agente antes de iniciar.".to_string());
+        }
+
+        let normalized_role = match role.trim().to_ascii_lowercase().as_str() {
+            "research" | "pesquisa" | "pesquisador" => "research",
+            "coder" | "codigo" | "código" | "dev" => "coder",
+            "operator" | "operador" | "windows" => "operator",
+            "planner" | "planejador" | "estrategista" => "planner",
+            _ => "research",
+        };
+
+        let display_name = name
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| match normalized_role {
+                "research" => "Pesquisador Web".to_string(),
+                "coder" => "Engenheiro de Código".to_string(),
+                "operator" => "Operador Windows".to_string(),
+                "planner" => "Estrategista".to_string(),
+                _ => "Agente Autônomo".to_string(),
+            });
+
+        let role_prompt = match normalized_role {
+            "research" => "Pesquisador Web — busque fontes atualizadas, cruze fatos, destaque dados relevantes e entregue um relatório claro com conclusões práticas.",
+            "coder" => "Engenheiro de Software — analise problemas técnicos, escreva código limpo, edite arquivos se necessário e apresente soluções prontas.",
+            "operator" => "Operador Windows — execute automações locais, verifique arquivos/processos ou controle o navegador conforme solicitado com segurança.",
+            "planner" => "Estrategista e Planejador — decomponha o objetivo em etapas concretas, prioridades, riscos e próximos passos acionáveis.",
+            _ => "Agente Autônomo J.A.R.V.I.S. — execute a missão solicitada com máxima clareza, precisão e iniciativa.",
+        }
+        .to_string();
+
+        let agent_id = format!("agent:{}", Uuid::new_v4());
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        {
+            let mut map = state.agent_cancels.lock().await;
+            map.insert(agent_id.clone(), cancel_tx);
+        }
+
+        let _ = app.emit(
+            "jarvis:agent-spawned",
+            json!({
+                "id": agent_id,
+                "role": normalized_role,
+                "name": display_name,
+                "task": clean_task,
+            }),
+        );
+
+        let app_clone = app.clone();
+        let state_arc = Arc::clone(state);
+        let spawned_id = agent_id.clone();
+
+        tokio::spawn(async move {
+            let result = run_agent_turn(
+                &app_clone,
+                &state_arc,
+                &spawned_id,
+                &role_prompt,
+                &clean_task,
+                cancel_rx,
+            )
+            .await;
+
+            {
+                let mut map = state_arc.agent_cancels.lock().await;
+                map.remove(&spawned_id);
+            }
+
+            match result {
+                Ok((reply_text, response_mode, traces)) => {
+                    let msg = StoredMessage {
+                        id: Uuid::new_v4().to_string(),
+                        role: "assistant".to_string(),
+                        text: reply_text,
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                        mode: Some(response_mode),
+                        tool_events: traces,
+                    };
+                    let _ = app_clone.emit(
+                        "jarvis:chat-event",
+                        json!({
+                            "type": "done",
+                            "conversationId": spawned_id,
+                            "message": msg
+                        }),
+                    );
+                }
+                Err(err) if err == "CANCELLED" => {
+                    let _ = app_clone.emit(
+                        "jarvis:chat-event",
+                        json!({
+                            "type": "cancelled",
+                            "conversationId": spawned_id
+                        }),
+                    );
+                }
+                Err(err) => {
+                    let _ = app_clone.emit(
+                        "jarvis:chat-event",
+                        json!({
+                            "type": "error",
+                            "conversationId": spawned_id,
+                            "error": err
+                        }),
+                    );
+                }
+            }
+        });
+
+        Ok(agent_id)
+    })
+}
+
+pub async fn test_provider_connection(state: &Arc<AppState>) -> ConnectionTestResult {
+    let cfg = state.config.read().await.clone();
+    let started = Instant::now();
+
+    let res: Result<String, String> = match cfg.provider {
+        Provider::Gemini => match resolve_gemini_auth(state, &cfg).await {
+            Err(e) => Err(e),
+            Ok(auth) => {
+                let url = format!(
+                    "https://generativelanguage.googleapis.com/v1beta/models/{}",
+                    cfg.gemini_model.trim()
+                );
+                match auth.apply(state.http.get(&url)).send().await {
+                    Ok(r) if r.status().is_success() => {
+                        let via = if cfg.gemini_auth_mode == GeminiAuthMode::Oauth {
+                            "OAuth Google"
+                        } else {
+                            "API Key"
+                        };
+                        Ok(format!("Conectado ao Gemini ({via} · {})", cfg.gemini_model))
+                    }
+                    Ok(r) => {
+                        let s = r.status();
+                        let t = r.text().await.unwrap_or_default();
+                        Err(format!("Gemini recusou ({s}): {t}"))
+                    }
+                    Err(e) => Err(format!("Falha de rede: {e}")),
+                }
+            }
+        },
+        Provider::Chatgpt => {
+            match oauth::get_valid_access_token(&state.http, &state.data_dir).await {
+                Err(e) => Err(e),
+                Ok(token) => match oauth::list_chatgpt_models_with_token(&state.http, &token).await {
+                    Ok(models) => {
+                        let plan_ok = oauth::load_session(&state.data_dir)
+                            .map(|s| s.plan_usage_granted)
+                            .unwrap_or(false);
+                        if plan_ok {
+                            Ok(format!(
+                                "ChatGPT OAuth conectado ({} modelos; ativo: {})",
+                                models.len(),
+                                cfg.chatgpt_model
+                            ))
+                        } else {
+                            Ok(format!(
+                                "Conectado ao ChatGPT ({} modelos), porém o escopo chatgpt.tokens.use.direct não foi concedido.",
+                                models.len()
+                            ))
+                        }
+                    }
+                    Err(e) => Err(e),
+                },
+            }
+        }
+    };
+
+    let latency_ms = started.elapsed().as_millis() as u64;
+    match res {
+        Ok(message) => ConnectionTestResult {
+            ok: true,
+            message,
+            latency_ms,
+        },
+        Err(message) => ConnectionTestResult {
+            ok: false,
+            message,
+            latency_ms,
+        },
+    }
+}
+
+pub async fn transcribe_audio(
+    state: &Arc<AppState>,
+    audio_base64: &str,
+    mime_type: &str,
+) -> Result<String, String> {
+    let cfg = state.config.read().await.clone();
+    let gemini_key = get_api_key(&state.data_dir, KeySlot::Gemini);
+    let elevenlabs_key = get_api_key(&state.data_dir, KeySlot::Elevenlabs);
+    let google_oauth_ready = google_oauth::load_google_session(&state.data_dir).is_some();
+
+    let chosen = match cfg.stt_engine {
+        SttEngine::Browser => return Err("BROWSER_STT_SELECTED".to_string()),
+        SttEngine::Elevenlabs => SttEngine::Elevenlabs,
+        SttEngine::Gemini => SttEngine::Gemini,
+        SttEngine::Auto => {
+            if (cfg.gemini_auth_mode == GeminiAuthMode::Oauth && google_oauth_ready)
+                || gemini_key.is_some()
+                || google_oauth_ready
+            {
+                SttEngine::Gemini
+            } else if elevenlabs_key.is_some() {
+                SttEngine::Elevenlabs
+            } else {
+                return Err("NO_STT_PROVIDER".to_string());
+            }
+        }
+    };
+
+    match chosen {
+        SttEngine::Elevenlabs => {
+            use base64::Engine as _;
+            let key = elevenlabs_key.ok_or_else(|| {
+                "Chave da ElevenLabs não configurada para transcrição de voz.".to_string()
+            })?;
+            let audio_bytes = base64::engine::general_purpose::STANDARD
+                .decode(audio_base64.trim())
+                .map_err(|e| format!("Áudio base64 inválido: {e}"))?;
+
+            let mut last_err = String::new();
+            for model_id in ["scribe_v2", "scribe_v1"] {
+                let part = reqwest::multipart::Part::bytes(audio_bytes.clone())
+                    .file_name("speech.wav")
+                    .mime_str(if mime_type.trim().is_empty() {
+                        "audio/wav"
+                    } else {
+                        mime_type.trim()
+                    })
+                    .map_err(|e| format!("MIME de áudio inválido: {e}"))?;
+                let form = reqwest::multipart::Form::new()
+                    .text("model_id", model_id.to_string())
+                    .text("language_code", "por")
+                    .text("tag_audio_events", "false")
+                    .part("file", part);
+
+                let resp = state
+                    .http
+                    .post("https://api.elevenlabs.io/v1/speech-to-text")
+                    .timeout(std::time::Duration::from_secs(18))
+                    .header("xi-api-key", &key)
+                    .multipart(form)
+                    .send()
+                    .await
+                    .map_err(|e| format!("Erro na transcrição ElevenLabs: {e}"))?;
+
+                if resp.status().is_success() {
+                    let parsed: Value = resp
+                        .json()
+                        .await
+                        .map_err(|e| format!("Resposta inválida da ElevenLabs STT: {e}"))?;
+                    let text = parsed["text"].as_str().unwrap_or("").trim().to_string();
+                    return Ok(text);
+                }
+
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                last_err = format!("ElevenLabs STT ({model_id}) retornou {status}: {body}");
+                // Retry with scribe_v1 only if model not found / bad request
+                if status.as_u16() != 400 && status.as_u16() != 404 && status.as_u16() != 422 {
+                    break;
+                }
+            }
+            Err(last_err)
+        }
+        SttEngine::Gemini => {
+            let auth = if cfg.gemini_auth_mode == GeminiAuthMode::Oauth
+                || (gemini_key.is_none() && google_oauth_ready)
+            {
+                let (token, session_proj) =
+                    google_oauth::get_valid_google_token(&state.http, &state.data_dir).await?;
+                let project_id = if !cfg.google_oauth_project_id.trim().is_empty() {
+                    Some(cfg.google_oauth_project_id.trim().to_string())
+                } else {
+                    session_proj
+                };
+                GeminiAuth::OAuth { token, project_id }
+            } else {
+                let key = gemini_key.ok_or_else(|| {
+                    "Chave Gemini ou login Google OAuth não configurado para transcrição.".to_string()
+                })?;
+                GeminiAuth::ApiKey(key)
+            };
+            let url = format!(
+                "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+                cfg.gemini_model.trim()
+            );
+            let body = json!({
+                "contents": [{
+                    "parts": [
+                        { "text": "Transcreva fielmente a fala neste áudio em português do Brasil. Retorne apenas a transcrição limpa, sem comentários nem aspas. Se houver apenas silêncio, retorne string vazia." },
+                        { "inlineData": { "mimeType": mime_type, "data": audio_base64 } }
+                    ]
+                }]
+            });
+            let resp = auth
+                .apply(state.http.post(&url))
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("Erro na transcrição Gemini: {e}"))?;
+            if !resp.status().is_success() {
+                let s = resp.status();
+                let t = resp.text().await.unwrap_or_default();
+                return Err(format!("Transcrição Gemini falhou ({s}): {t}"));
+            }
+            let json: Value = resp
+                .json()
+                .await
+                .map_err(|e| format!("Resposta inválida na transcrição Gemini: {e}"))?;
+            let text = json["candidates"][0]["content"]["parts"][0]["text"]
+                .as_str()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            Ok(text)
+        }
+        _ => Err("BROWSER_STT_SELECTED".to_string()),
+    }
+}

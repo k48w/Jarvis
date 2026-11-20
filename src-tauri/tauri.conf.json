@@ -1,0 +1,40 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "JARVIS",
+  "mainBinaryName": "JARVIS",
+  "version": "../package.json",
+  "identifier": "studio.jarvis.cinematic",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{
+      "label": "main",
+      "title": "J.A.R.V.I.S. — The Singularity Edition",
+      "width": 1600,
+      "height": 900,
+      "preventOverflow": true,
+      "center": true,
+      "resizable": true,
+      "theme": "Dark",
+      "backgroundColor": "#02040A"
+    }],
+    "security": {
+      "capabilities": ["main-window"],
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob: https: http:; style-src 'self' 'unsafe-inline'; media-src 'self' blob: data:; object-src 'none'; frame-src 'self' https: http:; base-uri 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "shortDescription": "J.A.R.V.I.S. cinematic desktop experience",
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper" },
+      "nsis": { "installMode": "currentUser", "installerIcon": "icons/icon.ico" }
+    }
+  }
+}
