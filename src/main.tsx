@@ -34,6 +34,7 @@ import { HudOverlay, VoiceSpectrum } from "./HudOverlay";
 import { ResponseCard } from "./ResponseCard";
 import { AgentsView, type AgentRun } from "./AgentsView";
 import { BrowserView } from "./BrowserView";
+import { CommandPalette } from "./CommandPalette";
 import { DiffView, type FileDiffRecord } from "./DiffView";
 import { LandingShowcase } from "./LandingShowcase";
 import { MascotBuddy, MascotWindow } from "./MascotBuddy";
@@ -359,6 +360,7 @@ function App() {
   const [attachedImage, setAttachedImage] = useState<AttachedImage | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [mascotBubble, setMascotBubble] = useState<string | null>(null);
   const [mascotReaction, setMascotReaction] = useState<
     "wave" | "cheer" | "alert" | null
@@ -1631,7 +1633,13 @@ function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((prev) => !prev);
+        return;
+      }
       if (e.key === "Escape") {
+        setPaletteOpen(false);
         setDrawer("none");
         setImmersive(false);
       }
@@ -2573,6 +2581,31 @@ function App() {
           onClose={() => setDrawer("none")}
         />
       )}
+
+      <CommandPalette
+        open={paletteOpen}
+        wakeEnabled={config.wake_word_enabled}
+        muted={muted}
+        onClose={() => setPaletteOpen(false)}
+        onRunPrompt={(prompt) => {
+          setWorkspaceView("core");
+          void submitText(prompt, false);
+        }}
+        onPasteClipboard={() => void handlePasteClipboard()}
+        onToggleWake={() => handleMascotQuickAction("toggle_wake")}
+        onToggleMute={() => handleMascotQuickAction("toggle_mute")}
+        onNewChat={() => {
+          setWorkspaceView("core");
+          void startNewConversation();
+        }}
+        onThemeChange={(t) => {
+          saveLs("theme", t);
+          setTheme(t);
+          themeRef.current = t;
+        }}
+        onToggleFullscreen={() => void handleToggleFullscreen()}
+        onOpenSettings={() => setDrawer("settings")}
+      />
 
       {audioError && <output>Áudio indisponível nesta sessão.</output>}
     </main>
