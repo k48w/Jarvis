@@ -161,6 +161,12 @@ async function runBrowserTest() {
       }
     });
     await page.goto(server.resolvedUrls.local[0]);
+    await page
+      .getByRole("heading", { name: /É um copiloto vivo no seu Windows/i })
+      .waitFor();
+    await page
+      .getByRole("button", { name: /Abrir Simulador 3D ao Vivo/i })
+      .click();
     await verifyAssistant(page, "docs/assistant.png", { isDesktop: false });
     assert.deepEqual(errors, []);
   } finally {

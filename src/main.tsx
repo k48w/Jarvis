@@ -35,6 +35,7 @@ import { ResponseCard } from "./ResponseCard";
 import { AgentsView, type AgentRun } from "./AgentsView";
 import { BrowserView } from "./BrowserView";
 import { DiffView, type FileDiffRecord } from "./DiffView";
+import { LandingShowcase } from "./LandingShowcase";
 import { MascotBuddy, MascotWindow } from "./MascotBuddy";
 import { AudioEngine } from "./audio";
 import {
@@ -327,6 +328,12 @@ function App() {
       ? matchMedia("(prefers-reduced-motion: reduce)").matches
       : readLs("reduced") === "true",
   );
+  const [showLanding, setShowLanding] = useState(() => {
+    if (isTauri) return false;
+    if (typeof window === "undefined") return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get("app") !== "1";
+  });
   const [showMascot, setShowMascot] = useState(
     () => readLs("showMascot") !== "false",
   );
@@ -1679,6 +1686,27 @@ function App() {
     "Timer de 5 minutos",
   ];
 
+  if (!isTauri && showLanding) {
+    return (
+      <LandingShowcase
+        theme={theme}
+        onThemeChange={(t) => {
+          saveLs("theme", t);
+          setTheme(t);
+          themeRef.current = t;
+        }}
+        onEnterSimulator={() => {
+          try {
+            window.history.replaceState(null, "", "?app=1");
+          } catch {
+            /* ignore */
+          }
+          setShowLanding(false);
+        }}
+      />
+    );
+  }
+
   return (
     <main
       data-state={mode}
@@ -1720,6 +1748,25 @@ function App() {
             <strong>J.A.R.V.I.S.</strong>
             <small>V8.0</small>
           </div>
+          {!isTauri && !immersive && (
+            <button
+              type="button"
+              className="mode-pill"
+              aria-label="Voltar ao site de apresentação"
+              title="Voltar à página de apresentação do J.A.R.V.I.S."
+              onClick={() => {
+                try {
+                  window.history.replaceState(null, "", window.location.pathname);
+                } catch {
+                  /* ignore */
+                }
+                setShowLanding(true);
+              }}
+            >
+              <Globe />
+              <span>Site Oficial</span>
+            </button>
+          )}
           {!immersive && (
             <button
               type="button"
