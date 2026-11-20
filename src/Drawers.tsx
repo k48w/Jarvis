@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Check,
+  Download,
   Folder,
   FolderPlus,
   Loader2,
@@ -138,6 +139,34 @@ export function HistoryDrawer({
     }
   }
 
+  function exportConversationMarkdown() {
+    if (messages.length === 0) return;
+    const activeConv = conversations.find((c) => c.id === activeConversationId);
+    const title = activeConv?.title ?? "Conversa J.A.R.V.I.S.";
+    const lines = [
+      `# ${title}`,
+      `> Exportado do **J.A.R.V.I.S. V8.0 — The Singularity Edition** em ${new Date().toLocaleString("pt-BR")}`,
+      "",
+    ];
+    for (const m of messages) {
+      const author = m.role === "user" ? "🧑 Você" : "🤖 J.A.R.V.I.S.";
+      lines.push(`### ${author}`);
+      if (m.tool_events.length > 0) {
+        lines.push(
+          `*Ferramentas:* ${m.tool_events.map((t) => `\`${t.title}\``).join(", ")}`,
+        );
+      }
+      lines.push("", m.text, "");
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${title.replace(/[^a-zA-Z0-9_-]+/g, "-").toLowerCase() || "jarvis-chat"}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   const projectIds = new Set(projects.map((p) => p.id));
   const recentConvs = conversations.filter(
     (c) => !c.project_id || !projectIds.has(c.project_id),
@@ -258,6 +287,16 @@ export function HistoryDrawer({
             >
               <FolderPlus /> Adicionar projeto
             </button>
+            {messages.length > 0 && (
+              <button
+                type="button"
+                className="mini-btn"
+                title="Exportar conversa atual como Markdown (.md)"
+                onClick={exportConversationMarkdown}
+              >
+                <Download /> .md
+              </button>
+            )}
           </div>
 
           {showPathInput && (
