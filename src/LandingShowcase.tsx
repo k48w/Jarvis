@@ -32,7 +32,9 @@ import mascotSheetUrl from "./assets/mascot-sheet.png";
 import type { CoreState } from "./rhythm";
 
 const GITHUB_REPO_URL = "https://github.com/k48w/Jarvis";
-const GITHUB_RELEASE_URL = "https://github.com/k48w/Jarvis/releases";
+const GITHUB_RELEASE_URL =
+  "https://github.com/k48w/Jarvis/releases/download/v8.0.0/JARVIS_8.0.0_x64-setup.exe";
+const GITHUB_RELEASES_PAGE = "https://github.com/k48w/Jarvis/releases/tag/v8.0.0";
 
 const THEME_OPTIONS: Array<{ id: VisualTheme; label: string; color: string }> = [
   { id: "cyan", label: "Stark Cyan", color: "#6ce8ff" },
@@ -892,8 +894,11 @@ npm run tauri -- build`}</code>
           <a href={GITHUB_REPO_URL} target="_blank" rel="noreferrer">
             GitHub (k48w/Jarvis)
           </a>
+          <a href={GITHUB_RELEASES_PAGE} target="_blank" rel="noreferrer">
+            Releases (v8.0.0)
+          </a>
           <a href={GITHUB_RELEASE_URL} target="_blank" rel="noreferrer">
-            Releases (.exe)
+            Baixar .exe Direto
           </a>
           <button type="button" className="lp-link-btn" onClick={onEnterSimulator}>
             Simulador 3D Web
