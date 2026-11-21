@@ -111,6 +111,70 @@ const STATE_DEMOS: Array<{
 
 type PillarId = "vision" | "browser" | "diff" | "voice";
 
+interface PlaygroundScenario {
+  id: string;
+  chip: string;
+  prompt: string;
+  tools: Array<{ name: string; detail: string; ms: string }>;
+  reply: string;
+}
+
+const PLAYGROUND_SCENARIOS: PlaygroundScenario[] = [
+  {
+    id: "game",
+    chip: "🎮 Olha meu jogo",
+    prompt: "Jarvis, olha meu jogo aberto e me diz onde está o boss neste mapa.",
+    tools: [
+      { name: "list_open_windows", detail: "3 janelas → [eldenring.exe] ELDEN RING™ (1920x1080)", ms: "6ms" },
+      { name: "see_screen", detail: 'target_window: "eldenring" · PrintWindow / DXGI 1280×720', ms: "41ms" },
+    ],
+    reply:
+      "O marcador dourado da graça aponta para o portão norte de Stormveil, senhor. Equipe o escudo com 100% de defesa física antes de atravessar a névoa.",
+  },
+  {
+    id: "clipboard",
+    chip: "📋 Explica meu Ctrl+C",
+    prompt: "Ei Jarvis, analisa o erro ou print que acabei de copiar no Ctrl+C.",
+    tools: [
+      { name: "read_clipboard", detail: "Win32 OpenClipboard → CF_UNICODETEXT (418 bytes)", ms: "3ms" },
+    ],
+    reply:
+      "Você copiou um erro E0793 do Rust (referência desalinhada em struct packed). Copie o campo para uma variável local antes de fatiar o array.",
+  },
+  {
+    id: "whatsapp",
+    chip: "🌐 Abre o WhatsApp Web",
+    prompt: "Abre o WhatsApp Web no seu navegador embutido pra eu ver as mensagens.",
+    tools: [
+      { name: "browser_navigate", detail: "Child WebView2 60fps → https://web.whatsapp.com/", ms: "118ms" },
+      { name: "browser_inspect", detail: "CDP DOM Snapshot · 14 elementos interativos mapeados", ms: "24ms" },
+    ],
+    reply:
+      "Pronto, senhor. Abri o WhatsApp Web no painel dividido ao lado da nossa conversa.",
+  },
+  {
+    id: "code",
+    chip: "🧩 Edita código do projeto",
+    prompt: "Ativa o Wake Word por padrão no config.rs do projeto e me mostra o diff.",
+    tools: [
+      { name: "read_file", detail: "src-tauri/src/config.rs (linhas 1-145)", ms: "4ms" },
+      { name: "edit_file", detail: "src-tauri/src/config.rs · +1 -1 linha · Diff disponível", ms: "9ms" },
+    ],
+    reply:
+      "Alteração aplicada em src-tauri/src/config.rs, senhor. A aba Código no topo já exibe o diff colorido com opção de desfazer em 1 clique.",
+  },
+  {
+    id: "agent",
+    chip: "🤖 Cria agente pesquisador",
+    prompt: "Cria um subagente em segundo plano para comparar Tauri 2 vs Electron em uso de RAM.",
+    tools: [
+      { name: "spawn_agent", detail: 'role: "research" · Agente "Analista de Benchmarks" iniciado', ms: "12ms" },
+    ],
+    reply:
+      "Subagente lançado em segundo plano, senhor. A aba Agentes foi aberta no topo e o mascote avisará assim que o relatório terminar.",
+  },
+];
+
 function MiniMascotPreview({ mode, bubble }: { mode: CoreState; bubble: string }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -186,6 +250,7 @@ export function LandingShowcase({
   const [demoState, setDemoState] = useState<CoreState>("responding");
   const [heroVisualMode, setHeroVisualMode] = useState<"studio" | "live3d">("studio");
   const [activePillar, setActivePillar] = useState<PillarId>("vision");
+  const [activeScenarioId, setActiveScenarioId] = useState<string>("game");
   const [activeSlide, setActiveSlide] = useState<string>("cockpit");
   const [copiedCmd, setCopiedCmd] = useState(false);
   const demoAudioRef = useRef<number>(0.42);
@@ -231,6 +296,9 @@ export function LandingShowcase({
 
   const currentDemo =
     STATE_DEMOS.find((d) => d.id === demoState) ?? STATE_DEMOS[0];
+  const currentScenario =
+    PLAYGROUND_SCENARIOS.find((s) => s.id === activeScenarioId) ??
+    PLAYGROUND_SCENARIOS[0];
 
   async function handleCopyInstall() {
     const cmd = `git clone https://github.com/k48w/Jarvis.git\ncd Jarvis\nnpm ci\nnpm run tauri -- build`;
@@ -752,6 +820,62 @@ export function LandingShowcase({
               </div>
             </div>
           )}
+        </div>
+      </section>
+
+      {/* INTERACTIVE COMMAND PLAYGROUND */}
+      <section className="lp-section">
+        <div className="lp-section-head">
+          <span className="lp-eyebrow">PLAYGROUND DE COMANDOS REAIS</span>
+          <h2>Veja como o núcleo executa ferramentas nativas em milissegundos</h2>
+          <p>
+            Escolha um cenário abaixo para inspecionar a cadeia exata de chamadas Win32 / CDP
+            que o J.A.R.V.I.S. executa no Windows.
+          </p>
+        </div>
+
+        <div className="lp-playground-card">
+          <div className="lp-playground-chips" role="tablist">
+            {PLAYGROUND_SCENARIOS.map((sc) => (
+              <button
+                key={sc.id}
+                type="button"
+                role="tab"
+                aria-selected={activeScenarioId === sc.id}
+                className={
+                  activeScenarioId === sc.id ? "lp-play-chip active" : "lp-play-chip"
+                }
+                onClick={() => setActiveScenarioId(sc.id)}
+              >
+                {sc.chip}
+              </button>
+            ))}
+          </div>
+
+          <div className="lp-playground-stage">
+            <div className="lp-play-prompt">
+              <small>COMANDO DE VOZ OU TEXTO</small>
+              <strong>&ldquo;{currentScenario.prompt}&rdquo;</strong>
+            </div>
+
+            <div className="lp-play-traces">
+              {currentScenario.tools.map((t, i) => (
+                <div key={i} className="lp-play-trace-row">
+                  <span className="lp-trace-dot" />
+                  <code>{t.name}</code>
+                  <span className="lp-trace-detail">{t.detail}</span>
+                  <kbd>{t.ms}</kbd>
+                </div>
+              ))}
+            </div>
+
+            <div className="lp-play-reply">
+              <div className="lp-play-reply-head">
+                <Volume2 /> <span>J.A.R.V.I.S. · ElevenLabs Flash v2.5</span>
+              </div>
+              <p>{currentScenario.reply}</p>
+            </div>
+          </div>
         </div>
       </section>
 

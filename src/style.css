@@ -4704,6 +4704,144 @@ body.mascot-window-root {
   border-radius: 14px;
 }
 
+/* Interactive Command Playground */
+.lp-playground-card {
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(5, 11, 19, 0.88);
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.lp-playground-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.lp-play-chip {
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(2, 7, 14, 0.8);
+  color: #a9cade;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.lp-play-chip.active {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.16);
+  color: #fff;
+  box-shadow: 0 0 18px rgba(var(--accent-rgb), 0.2);
+}
+
+.lp-playground-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: #02050a;
+}
+
+.lp-play-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lp-play-prompt small {
+  font: 600 10px Consolas, monospace;
+  letter-spacing: 0.14em;
+  color: #799bb0;
+}
+
+.lp-play-prompt strong {
+  font-size: 16px;
+  color: #f2fbff;
+}
+
+.lp-play-traces {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(var(--accent-rgb), 0.16);
+}
+
+.lp-play-trace-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font: 400 12px Consolas, monospace;
+}
+
+.lp-trace-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #54ffe0;
+  box-shadow: 0 0 8px #54ffe0;
+  flex-shrink: 0;
+}
+
+.lp-play-trace-row code {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.lp-trace-detail {
+  flex: 1;
+  color: #b7d7ea;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lp-play-trace-row kbd {
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(84, 255, 224, 0.12);
+  color: #7bfce7;
+  font-size: 11px;
+}
+
+.lp-play-reply {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border-left: 3px solid var(--accent);
+  background: rgba(var(--accent-rgb), 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lp-play-reply-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font: 600 11px Consolas, monospace;
+  color: var(--accent);
+}
+
+.lp-play-reply-head svg {
+  width: 14px;
+  height: 14px;
+}
+
+.lp-play-reply p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: #eef9ff;
+}
+
 /* Comparison Table */
 .lp-table-wrap {
   border-radius: 20px;
