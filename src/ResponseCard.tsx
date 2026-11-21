@@ -33,14 +33,30 @@ function splitBlocks(raw: string): Block[] {
 
 function renderInline(line: string, keyPrefix: string): ReactNode[] {
   const parts: ReactNode[] = [];
-  const regex = /(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g;
+  const regex = /(\[[^\]]+\]\(https?:\/\/[^\s)]+\)|\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g;
   let last = 0;
   let k = 0;
   for (const m of line.matchAll(regex)) {
     const idx = m.index ?? 0;
     if (idx > last) parts.push(line.slice(last, idx));
     const token = m[0];
-    if (token.startsWith("**")) {
+    if (token.startsWith("[")) {
+      const linkMatch = /^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/.exec(token);
+      if (linkMatch) {
+        parts.push(
+          <a
+            key={`${keyPrefix}-a-${k++}`}
+            href={linkMatch[2]}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {linkMatch[1]}
+          </a>,
+        );
+      } else {
+        parts.push(token);
+      }
+    } else if (token.startsWith("**")) {
       parts.push(<strong key={`${keyPrefix}-b-${k++}`}>{token.slice(2, -2)}</strong>);
     } else if (token.startsWith("`")) {
       parts.push(<code key={`${keyPrefix}-c-${k++}`}>{token.slice(1, -1)}</code>);
