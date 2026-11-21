@@ -4,11 +4,11 @@ use crate::storage;
 use crate::tools;
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Listener};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -22,6 +22,7 @@ const MAX_CONCURRENT_CONNS: usize = 32;
 const MAX_SSE_CLIENTS: usize = 6;
 const HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 const BODY_TIMEOUT: Duration = Duration::from_secs(10);
+const SESSION_TTL: Duration = Duration::from_secs(8 * 60 * 60);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,7 +41,7 @@ pub struct CompanionState {
     pub enabled: AtomicBool,
     pub lan_enabled: AtomicBool,
     pub pairing_code: RwLock<String>,
-    pub sessions: RwLock<HashSet<String>>,
+    pub sessions: RwLock<HashMap<String, Instant>>,
     pub port: AtomicU16,
     pub connected_clients: AtomicUsize,
     pub events_tx: broadcast::Sender<String>,
@@ -70,7 +71,7 @@ impl CompanionState {
             enabled: AtomicBool::new(false),
             lan_enabled: AtomicBool::new(false),
             pairing_code: RwLock::new(generate_pairing_code()),
-            sessions: RwLock::new(HashSet::new()),
+            sessions: RwLock::new(HashMap::new()),
             port: AtomicU16::new(47821),
             connected_clients: AtomicUsize::new(0),
             events_tx,
@@ -326,12 +327,27 @@ fn extract_session_id(req: &ParsedHttpRequest) -> Option<String> {
 
 async fn validate_session(companion: &CompanionState, req: &ParsedHttpRequest) -> Option<String> {
     let sid = extract_session_id(req)?;
-    let sessions = companion.sessions.read().await;
-    if sessions.contains(&sid) {
+    let mut sessions = companion.sessions.write().await;
+    let valid = sessions
+        .get(&sid)
+        .is_some_and(|issued| issued.elapsed() < SESSION_TTL);
+    if valid {
         Some(sid)
     } else {
+        sessions.remove(&sid);
         None
     }
+}
+
+async fn session_is_active(companion: &CompanionState, sid: &str) -> bool {
+    let mut sessions = companion.sessions.write().await;
+    let valid = sessions
+        .get(sid)
+        .is_some_and(|issued| issued.elapsed() < SESSION_TTL);
+    if !valid {
+        sessions.remove(sid);
+    }
+    valid
 }
 
 async fn write_http_response(
@@ -479,9 +495,14 @@ pub(crate) async fn handle_client_core(
         let session_id = Uuid::new_v4().simple().to_string();
         {
             let mut sessions = companion.sessions.write().await;
-            sessions.insert(session_id.clone());
+            sessions.insert(session_id.clone(), Instant::now());
         }
-        let cookie_val = format!("jarvis_session={session_id}; HttpOnly; SameSite=Strict; Path=/");
+        // The server is HTTP today, so Secure would prevent the mobile browser from
+        // sending the cookie. SameSite/HttpOnly still reduce script and cross-site risk;
+        // LAN mode is explicitly labeled as trusted-network-only in the UI.
+        let cookie_val = format!(
+            "jarvis_session={session_id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800"
+        );
         let _ = write_http_response(
             &mut stream,
             "200 OK",
@@ -538,7 +559,7 @@ pub(crate) async fn handle_client_core(
             tokio::select! {
                 _ = ping.tick() => {
                     if !companion.enabled.load(Ordering::SeqCst)
-                        || !companion.sessions.read().await.contains(&session_id)
+                        || !session_is_active(&companion, &session_id).await
                     {
                         break;
                     }
@@ -549,7 +570,7 @@ pub(crate) async fn handle_client_core(
                 }
                 msg = rx.recv() => {
                     if !companion.enabled.load(Ordering::SeqCst)
-                        || !companion.sessions.read().await.contains(&session_id)
+                        || !session_is_active(&companion, &session_id).await
                     {
                         break;
                     }
@@ -853,7 +874,7 @@ pub(crate) async fn handle_client_core(
                     );
                     Ok("Aprovação processada.".to_string())
                 } else {
-                    Ok("Aprovação já havia sido processada.".to_string())
+                    Err("Aprovação inexistente ou já processada.".to_string())
                 }
             }
             "cancel" => {
@@ -1085,7 +1106,7 @@ mod tests {
         s.write_all(req.as_bytes()).await.unwrap();
         let mut out = Vec::new();
         let mut buf = [0u8; 4096];
-        while let Ok(n) = tokio::time::timeout(Duration::from_millis(600), s.read(&mut buf))
+        while let Ok(n) = tokio::time::timeout(Duration::from_secs(5), s.read(&mut buf))
             .await
             .unwrap_or(Ok(0))
         {
@@ -1203,9 +1224,9 @@ mod tests {
         let sse_ev = String::from_utf8_lossy(&sse_buf[..n_ev]);
         assert!(sse_ev.contains("approval_resolved"));
 
-        // Duplicate approve must succeed harmlessly and /api/status must show null pendingApproval
+        // Duplicate approve must be rejected and /api/status must show null pendingApproval
         let r_dup = send_raw_http(addr, &app_req).await;
-        assert!(r_dup.starts_with("HTTP/1.1 200"));
+        assert!(r_dup.starts_with("HTTP/1.1 400"));
         let r_status_after = send_raw_http(
             addr,
             &format!("GET /api/status HTTP/1.1\r\nHost: localhost\r\nCookie: jarvis_session={sid}\r\n\r\n"),

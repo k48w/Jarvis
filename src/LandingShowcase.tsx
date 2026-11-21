@@ -397,7 +397,7 @@ export function LandingShowcase({
               <Download />
               <div>
                 <strong>Baixar para Windows x64</strong>
-                <small>Instalador .exe · ~7.7 MB</small>
+                <small>Instalador .exe · ~7.8 MB</small>
               </div>
             </a>
 
@@ -1041,9 +1041,16 @@ export function LandingShowcase({
               <tr>
                 <td>Celular ↔ PC (QR Code)</td>
                 <td className="highlight">
-                  <strong>PWA pareado na rede local</strong>: voz remota, Deck de Skills, tela do PC e aprovação 2FA
+                  <strong>PWA pareado com código único + cookie HttpOnly (8h)</strong>: voz remota, Deck de Skills, tela do PC e aprovação 2FA
                 </td>
                 <td>Sem controle nativo do PC pelo celular</td>
+              </tr>
+              <tr>
+                <td>Segurança &amp; Credenciais</td>
+                <td className="highlight">
+                  <strong>DPAPI no Windows + proteção SSRF</strong> e Companion desligado por padrão
+                </td>
+                <td>Credenciais em texto puro ou sem proteção LAN</td>
               </tr>
               <tr>
                 <td>Navegador Integrado</td>
@@ -1055,7 +1062,7 @@ export function LandingShowcase({
               <tr>
                 <td>Tamanho do Instalador</td>
                 <td className="highlight">
-                  <strong>~7.7 MB (Tauri 2 + Rust)</strong>
+                  <strong>~7.8 MB (Tauri 2 + Rust)</strong>
                 </td>
                 <td>150 MB – 300 MB (Electron)</td>
               </tr>

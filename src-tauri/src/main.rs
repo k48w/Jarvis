@@ -156,7 +156,13 @@ async fn save_config(
     state: State<'_, Arc<AppState>>,
     config: AppConfig,
 ) -> Result<AppConfig, String> {
-    save_config_file(&state.data_dir, &config)?;
+    let mut next_config = config;
+    {
+        let current = state.config.read().await;
+        next_config.companion_enabled = current.companion_enabled;
+        next_config.companion_lan_enabled = current.companion_lan_enabled;
+    }
+    save_config_file(&state.data_dir, &next_config)?;
     let normalized = load_config(&state.data_dir);
     let mut guard = state.config.write().await;
     *guard = normalized.clone();
@@ -467,7 +473,9 @@ pub(crate) async fn dispatch_chat_turn(
         .await;
 
         state_arc.finish_chat_cancel(cancel_gen).await;
-        let leftover = state_arc.cancel_all_pending_approvals().await;
+        let leftover = state_arc
+            .cancel_pending_approvals_for_generation(Some(cancel_gen))
+            .await;
         for cid in leftover {
             let _ = app.emit(
                 "jarvis:approval-resolved",
@@ -1348,9 +1356,15 @@ async fn get_companion_info(
 
 #[tauri::command]
 async fn set_companion_enabled(
+    state: State<'_, Arc<AppState>>,
     companion: State<'_, Arc<companion::CompanionState>>,
     enabled: bool,
 ) -> Result<companion::CompanionInfo, String> {
+    {
+        let mut cfg = state.config.write().await;
+        cfg.companion_enabled = enabled;
+        save_config_file(&state.data_dir, &cfg)?;
+    }
     companion.enabled.store(enabled, Ordering::SeqCst);
     if !enabled {
         companion.revoke_sessions_and_rotate_code().await;
@@ -1361,11 +1375,17 @@ async fn set_companion_enabled(
 
 #[tauri::command]
 async fn set_companion_lan_enabled(
+    state: State<'_, Arc<AppState>>,
     companion: State<'_, Arc<companion::CompanionState>>,
     lan_enabled: bool,
 ) -> Result<companion::CompanionInfo, String> {
-    companion.lan_enabled.store(lan_enabled, Ordering::SeqCst);
-    if !lan_enabled {
+    {
+        let mut cfg = state.config.write().await;
+        cfg.companion_lan_enabled = lan_enabled;
+        save_config_file(&state.data_dir, &cfg)?;
+    }
+    let prev_lan = companion.lan_enabled.swap(lan_enabled, Ordering::SeqCst);
+    if prev_lan != lan_enabled {
         companion.revoke_sessions_and_rotate_code().await;
     }
     companion.notify_listener_config().await;
@@ -1485,6 +1505,8 @@ fn main() {
             std::fs::create_dir_all(&data_dir)?;
 
             let cfg = load_config(&data_dir);
+            let companion_enabled = cfg.companion_enabled;
+            let companion_lan_enabled = cfg.companion_lan_enabled;
             let initial_shortcut = cfg.global_shortcut.clone();
             let app_state = Arc::new(
                 AppState::new(data_dir, cfg)
@@ -1495,6 +1517,12 @@ fn main() {
             app.manage(Arc::new(mic::MicController::default()));
             app.manage(Arc::new(terminal::TerminalController::default()));
             let companion_state = Arc::new(companion::CompanionState::new());
+            companion_state
+                .enabled
+                .store(companion_enabled, Ordering::SeqCst);
+            companion_state
+                .lan_enabled
+                .store(companion_lan_enabled, Ordering::SeqCst);
             app.manage(Arc::clone(&companion_state));
             routines::start_routines_scheduler(app.handle().clone(), app_state.data_dir.clone());
             companion::start_companion_server(

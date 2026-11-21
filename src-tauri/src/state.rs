@@ -27,6 +27,7 @@ pub struct AgentRunSnapshot {
 pub struct PendingApprovalEntry {
     pub request: Value,
     pub tx: oneshot::Sender<bool>,
+    pub generation: u64,
 }
 
 pub struct TimerHandle {
@@ -99,9 +100,28 @@ impl AppState {
         }
     }
 
+    #[cfg(test)]
     pub async fn register_approval(&self, id: String, request: Value, tx: oneshot::Sender<bool>) {
+        self.register_approval_for_generation(id, request, tx, 0)
+            .await;
+    }
+
+    pub async fn register_approval_for_generation(
+        &self,
+        id: String,
+        request: Value,
+        tx: oneshot::Sender<bool>,
+        generation: u64,
+    ) {
         let mut map = self.pending_approvals.lock().await;
-        map.insert(id, PendingApprovalEntry { request, tx });
+        map.insert(
+            id,
+            PendingApprovalEntry {
+                request,
+                tx,
+                generation,
+            },
+        );
     }
 
     pub async fn resolve_approval(&self, id: &str, approved: bool) -> bool {
@@ -125,11 +145,25 @@ impl AppState {
     }
 
     pub async fn cancel_all_pending_approvals(&self) -> Vec<String> {
+        self.cancel_pending_approvals_for_generation(None).await
+    }
+
+    pub async fn cancel_pending_approvals_for_generation(
+        &self,
+        generation: Option<u64>,
+    ) -> Vec<String> {
         let mut map = self.pending_approvals.lock().await;
         let mut ids = Vec::with_capacity(map.len());
-        for (id, entry) in map.drain() {
-            ids.push(id);
-            let _ = entry.tx.send(false);
+        let matching: Vec<String> = map
+            .iter()
+            .filter(|(_, entry)| generation.is_none() || Some(entry.generation) == generation)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in matching {
+            if let Some(entry) = map.remove(&id) {
+                ids.push(id);
+                let _ = entry.tx.send(false);
+            }
         }
         ids
     }

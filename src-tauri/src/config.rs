@@ -109,6 +109,8 @@ pub struct AppConfig {
     pub global_shortcut: String,
     pub minimize_to_tray: bool,
     pub web_search_enabled: bool,
+    pub companion_enabled: bool,
+    pub companion_lan_enabled: bool,
 }
 
 impl Default for AppConfig {
@@ -135,6 +137,8 @@ impl Default for AppConfig {
             global_shortcut: "Alt+Space".to_string(),
             minimize_to_tray: true,
             web_search_enabled: true,
+            companion_enabled: false,
+            companion_lan_enabled: false,
         }
     }
 }

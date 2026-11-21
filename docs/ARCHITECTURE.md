@@ -89,7 +89,7 @@ flowchart TD
 | `GET /api/screen` | Cookie `jarvis_session` / Bearer | Lista janelas abertas e captura tela/janela protegida por `ScreenCaptureGuard` |
 
 ### Modelo de Ameaça e Mitigações
-- **Desativado e Local por padrão**: no início do app, `enabled = false` e `lan_enabled = false` (bind em `127.0.0.1`). Enquanto desativado, todas as rotas retornam `503`. A exposição em `0.0.0.0` (LAN) exige ativação manual em **Ajustes → Celular** acompanhada de aviso explícito.
+- **Desativado e Local por padrão**: na primeira execução, `enabled = false` e `lan_enabled = false` (bind em `127.0.0.1`). A escolha do usuário é persistida entre execuções. Enquanto desativado, todas as rotas retornam `503`. A exposição em `0.0.0.0` (LAN) exige ativação manual em **Ajustes → Celular** acompanhada de aviso explícito.
 - **Limitação de Transporte (HTTP LAN)**: na rede Wi-Fi local, o servidor usa HTTP puro sem certificado TLS. Use o Modo LAN apenas em redes domésticas/privadas confiáveis e clique em **Revogar Sessões / Novo Código** sempre que terminar o uso em redes compartilhadas.
 - **Ciclo de Vida de Sessão**: não há token em URL, query string ou `localStorage`. O código do QR Code (`?pair=`) é de uso único e descartado imediatamente após a troca pelo cookie `HttpOnly`.
 - **Proteção contra Slowloris / Flood**: timeouts de leitura (`5s` header, `10s` corpo) e semáforos (`32` conexões HTTP e `6` streams SSE simultâneos, retornando `429` acima do limite).

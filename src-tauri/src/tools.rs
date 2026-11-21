@@ -1496,8 +1496,15 @@ async fn wait_for_user_approval(
         args_summary: args_summary.to_string(),
     };
     let req_val = serde_json::to_value(&req).unwrap_or_default();
+    let generation = state
+        .active_cancel
+        .lock()
+        .await
+        .as_ref()
+        .map(|(generation, _)| *generation)
+        .unwrap_or(0);
     state
-        .register_approval(approval_id.clone(), req_val, tx)
+        .register_approval_for_generation(approval_id.clone(), req_val, tx, generation)
         .await;
     let _ = app.emit("jarvis:tool-approval-request", req);
 
