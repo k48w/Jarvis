@@ -13,6 +13,16 @@ pub struct ActiveTimer {
     pub total_seconds: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentRunSnapshot {
+    pub id: String,
+    pub role: String,
+    pub name: String,
+    pub task: String,
+    pub status: String,
+    pub output: String,
+}
+
 pub struct TimerHandle {
     pub info: ActiveTimer,
     pub cancel_tx: oneshot::Sender<()>,
@@ -24,6 +34,7 @@ pub struct AppState {
     pub http: reqwest::Client,
     pub active_cancel: Mutex<Option<watch::Sender<bool>>>,
     pub agent_cancels: Mutex<HashMap<String, watch::Sender<bool>>>,
+    pub agent_runs: Mutex<Vec<AgentRunSnapshot>>,
     pub pending_approvals: Mutex<HashMap<String, oneshot::Sender<bool>>>,
     pub timers: Mutex<HashMap<String, TimerHandle>>,
     pub quitting: AtomicBool,
@@ -43,6 +54,7 @@ impl AppState {
             http,
             active_cancel: Mutex::new(None),
             agent_cancels: Mutex::new(HashMap::new()),
+            agent_runs: Mutex::new(Vec::new()),
             pending_approvals: Mutex::new(HashMap::new()),
             timers: Mutex::new(HashMap::new()),
             quitting: AtomicBool::new(false),

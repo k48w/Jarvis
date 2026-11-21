@@ -1056,6 +1056,26 @@ export function onAgentSpawned(
   return subscribeBrowser("jarvis:agent-spawned", handler);
 }
 
+export interface AgentCompletedSummaryEvent {
+  agentId: string;
+  agentName: string;
+  task: string;
+  spokenSummary: string;
+  cardSummary: string;
+}
+
+export function onAgentCompletedSummary(
+  handler: (ev: AgentCompletedSummaryEvent) => void,
+): Promise<UnlistenFn> {
+  if (isTauri) {
+    return listen<AgentCompletedSummaryEvent>(
+      "jarvis:agent-completed-summary",
+      (e) => handler(e.payload),
+    );
+  }
+  return subscribeBrowser("jarvis:agent-completed-summary", handler);
+}
+
 export function onBrowserPanel(
   handler: (ev: BrowserPanelEvent) => void,
 ): Promise<UnlistenFn> {

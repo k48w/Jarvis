@@ -41,6 +41,7 @@ fn build_system_prompt(
     cfg: &AppConfig,
     memories: &[MemoryItem],
     project_path: Option<&str>,
+    agent_runs: &[crate::state::AgentRunSnapshot],
 ) -> String {
     let mut prompt = cfg.system_prompt.trim().to_string();
     let mode_note = match cfg.permission_mode {
@@ -57,8 +58,36 @@ fn build_system_prompt(
     prompt.push_str("\n\n");
     prompt.push_str(mode_note);
     prompt.push_str(
-        "\n\nNavegador embutido autônomo: você possui controle real sobre o navegador Chromium 60fps integrado do J.A.R.V.I.S. (browser_navigate, browser_inspect, browser_click, browser_type, browser_scroll, browser_press_key, browser_back, browser_close). Sempre que o usuário pedir para abrir o navegador ou consultar/agir em qualquer site (como WhatsApp Web, YouTube, Google, GitHub, lojas), chame browser_navigate — o painel dividido do navegador abrirá automaticamente ao lado da conversa. Use browser_close apenas quando o usuário pedir para fechar.\n\nVisão inteligente de tela e janelas/jogos do Windows: você NÃO precisa pedir print ao usuário. Quando ele pedir para ver um programa ou jogo específico (ex.: 'olha meu jogo', 'vê o Firefox', 'olha o Discord', 'vê o VS Code'), primeiro entenda QUAL janela ele quer ver: se você não souber o nome exato do jogo/app aberto, chame list_open_windows para descobrir a janela certa e então chame see_screen(target_window: \"<nome>\") — isso captura aquela janela/jogo diretamente mesmo quando o usuário está com o navegador ou outro app aberto por cima! Use see_screen sem target_window apenas quando o usuário perguntar de forma genérica o que está na tela atual. Se ele pedir para clicar/digitar no app, use screen_click / screen_type / screen_hotkey.\n\nSubagentes paralelos: para tarefas longas, pesquisas profundas ou trabalho paralelo, use spawn_agent(role, name, task) — isso cria automaticamente a aba Agentes para o usuário acompanhar ao vivo.\n\nArquivos locais: você também pode listar, ler, buscar, criar e editar arquivos reais do computador usando list_files, read_file, search_files, write_file e edit_file (sempre leia o arquivo antes de editar um trecho; todas as edições aparecem com diff visual e botão de desfazer para o usuário).\n\nÁrea de transferência (Ctrl+C): quando o usuário disser 'o que eu copiei', 'analisa meu Ctrl+C', 'lê o print que copiei' ou 'área de transferência', chame read_clipboard para ler automaticamente o texto ou a imagem copiada.",
+        "\n\nREGRA ESTRITA DO NAVEGADOR EMBUTIDO vs. BUSCA RÁPIDA:\n\
+- Para perguntas gerais, notícias, fatos, clima, cotações ou pesquisas rápidas na web, NUNCA abra o navegador embutido (`browser_navigate`); responda diretamente ou use `web_search` e `fetch_webpage` silenciosamente em segundo plano.\n\
+- SÓ chame `browser_navigate` (e demais ferramentas `browser_*`) quando o usuário pedir EXPLICITAMENTE para abrir/mostrar o navegador ou interagir visualmente com um site/app web (ex.: 'abre o navegador', 'olha meu WhatsApp Web', 'abre o YouTube aqui do lado', 'clica em tal botão no site'). Use `browser_close` quando ele pedir para fechar.\n\n\
+Visão inteligente de tela e janelas/jogos do Windows: você NÃO precisa pedir print ao usuário. Quando ele pedir para ver um programa ou jogo específico (ex.: 'olha meu jogo', 'vê o Firefox', 'olha o Discord', 'vê o VS Code'), primeiro entenda QUAL janela ele quer ver: se você não souber o nome exato do jogo/app aberto, chame `list_open_windows` para descobrir a janela certa e então chame `see_screen(target_window: \"<nome>\")` — isso captura aquela janela/jogo diretamente mesmo quando o usuário está com o navegador ou outro app aberto por cima! Use `see_screen` sem `target_window` apenas quando o usuário perguntar de forma genérica o que está na tela atual. Se ele pedir para clicar/digitar no app, use `screen_click` / `screen_type` / `screen_hotkey`.\n\n\
+REGRA ESTRITA DE SUBAGENTES (`spawn_agent` vs. `check_agents`):\n\
+- Use `spawn_agent(role, name, task)` APENAS quando o usuário pedir para criar um agente ou iniciar uma NOVA missão longa em segundo plano.\n\
+- NUNCA chame `spawn_agent` quando o usuário perguntar se o agente já terminou, qual o status do agente ou o que o agente descobriu! Para isso, chame `check_agents` (ou consulte a lista de agentes ativos/concluídos abaixo) e resuma o resultado para o usuário.\n\n\
+Arquivos locais: você também pode listar, ler, buscar, criar e editar arquivos reais do computador usando `list_files`, `read_file`, `search_files`, `write_file` e `edit_file` (sempre leia o arquivo antes de editar um trecho; todas as edições aparecem com diff visual e botão de desfazer para o usuário).\n\n\
+Área de transferência (Ctrl+C): quando o usuário disser 'o que eu copiei', 'analisa meu Ctrl+C', 'lê o print que copiei' ou 'área de transferência', chame `read_clipboard` para ler automaticamente o texto ou a imagem copiada.",
     );
+
+    if !agent_runs.is_empty() {
+        prompt.push_str("\n\nStatus atual dos Subagentes em Segundo Plano (NÃO crie outro agente duplicado se já estiver aqui):\n");
+        for ag in agent_runs.iter().take(6) {
+            let excerpt: String = ag.output.chars().take(280).collect();
+            prompt.push_str(&format!(
+                "- [{}] {} (id: {}, missão: \"{}\"){}",
+                ag.status.to_uppercase(),
+                ag.name,
+                ag.id,
+                ag.task,
+                if excerpt.is_empty() {
+                    String::new()
+                } else {
+                    format!(" → Resultado parcial/final: {}", excerpt.replace('\n', " "))
+                }
+            ));
+            prompt.push('\n');
+        }
+    }
 
     if cfg.tts_engine == crate::config::TtsEngine::Elevenlabs
         && cfg.tts_reply_mode != crate::config::TtsReplyMode::Full
@@ -707,7 +736,9 @@ pub async fn run_chat_turn(
 ) -> Result<(String, String, Vec<ToolTrace>), String> {
     let cfg = state.config.read().await.clone();
     let memories = storage::list_memories(&state.data_dir).unwrap_or_default();
-    let system_prompt = build_system_prompt(&cfg, &memories, project_path.as_deref());
+    let agent_runs = state.agent_runs.lock().await.clone();
+    let system_prompt =
+        build_system_prompt(&cfg, &memories, project_path.as_deref(), &agent_runs);
 
     let window_start = history.len().saturating_sub(24);
     let recent = &history[window_start..];
@@ -771,10 +802,10 @@ pub async fn run_agent_turn(
     let memories = storage::list_memories(&state.data_dir).unwrap_or_default();
 
     let mut system_prompt = format!(
-        "Você é um subagente especializado do ecossistema J.A.R.V.I.S. rodando em segundo plano no Windows.\n\
+        "Você é um subagente especializado do ecossistema J.A.R.V.I.S. rodando silenciosamente em segundo plano no Windows.\n\
          Função designada: {role_prompt}\n\
-         Entregue um resultado direto, bem estruturado em Markdown (com listas e blocos de código quando útil) em português do Brasil.\n\
-         Use as ferramentas disponíveis quando ajudarem a concluir a missão com precisão."
+         Comece SEMPRE com um parágrafo inicial curto (1 a 2 frases diretas resumindo a conclusão principal) e depois coloque os detalhes estruturados em Markdown em português do Brasil.\n\
+         REGRA ESTRITA: NUNCA use `browser_navigate`, `browser_click`, `browser_type` ou `spawn_agent`. Para pesquisar na web em segundo plano, use EXCLUSIVAMENTE `web_search` e `fetch_webpage`."
     );
     if !memories.is_empty() {
         system_prompt.push_str("\n\nContexto do usuário:\n");
@@ -841,6 +872,82 @@ pub async fn run_agent_turn(
     Ok((final_text, response_mode, tool_traces))
 }
 
+fn build_concise_agent_speech(agent_name: &str, raw_output: &str) -> (String, String) {
+    let mut clean_lines: Vec<String> = Vec::new();
+    let mut in_code_block = false;
+    for line in raw_output.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_code_block = !in_code_block;
+            continue;
+        }
+        if in_code_block || trimmed.is_empty() {
+            continue;
+        }
+        let stripped = trimmed
+            .trim_start_matches('#')
+            .trim_start_matches('-')
+            .trim_start_matches('*')
+            .trim()
+            .replace("**", "")
+            .replace('`', "");
+        if !stripped.is_empty() {
+            clean_lines.push(stripped);
+        }
+    }
+
+    let joined = if clean_lines.is_empty() {
+        raw_output.trim().replace("**", "").replace('`', "")
+    } else {
+        clean_lines.join(" ")
+    };
+
+    let card_summary: String = if clean_lines.len() <= 3 {
+        clean_lines.join("\n")
+    } else {
+        clean_lines
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let card_clipped: String = if card_summary.chars().count() > 360 {
+        let mut s: String = card_summary.chars().take(357).collect();
+        s.push_str("...");
+        s
+    } else if card_summary.is_empty() {
+        "Missão concluída com sucesso.".to_string()
+    } else {
+        card_summary
+    };
+
+    // Extract 1-2 short sentences (~175 chars max) for natural TTS speech
+    let mut spoken_body = String::new();
+    for ch in joined.chars() {
+        spoken_body.push(ch);
+        let len = spoken_body.chars().count();
+        if len >= 65 && matches!(ch, '.' | '!' | '?') {
+            break;
+        }
+        if len >= 175 {
+            if let Some(pos) = spoken_body.rfind(' ') {
+                spoken_body.truncate(pos);
+            }
+            spoken_body.push('.');
+            break;
+        }
+    }
+    let spoken_body = spoken_body.trim();
+    let spoken_summary = if spoken_body.is_empty() {
+        format!("Senhor, o agente {agent_name} concluiu a tarefa.")
+    } else {
+        format!("Senhor, o agente {agent_name} concluiu: {spoken_body}")
+    };
+
+    (spoken_summary, card_clipped)
+}
+
 pub fn spawn_background_agent(
     app: &AppHandle,
     state: &Arc<AppState>,
@@ -866,6 +973,17 @@ pub fn spawn_background_agent(
             return Err("Descreva a missão do agente antes de iniciar.".to_string());
         }
 
+        // Prevent duplicate agents if an agent is already running
+        {
+            let runs = state.agent_runs.lock().await;
+            if let Some(existing) = runs.iter().find(|r| r.status == "running") {
+                return Ok(format!(
+                    "ALREADY_RUNNING:{}:{}:{}",
+                    existing.id, existing.name, existing.task
+                ));
+            }
+        }
+
         let normalized_role = match role.trim().to_ascii_lowercase().as_str() {
             "research" | "pesquisa" | "pesquisador" => "research",
             "coder" | "codigo" | "código" | "dev" => "coder",
@@ -887,9 +1005,9 @@ pub fn spawn_background_agent(
             });
 
         let role_prompt = match normalized_role {
-            "research" => "Pesquisador Web — busque fontes atualizadas, cruze fatos, destaque dados relevantes e entregue um relatório claro com conclusões práticas.",
+            "research" => "Pesquisador Web — busque fontes atualizadas usando web_search e fetch_webpage, cruze fatos, destaque dados relevantes e entregue um relatório claro com conclusões práticas.",
             "coder" => "Engenheiro de Software — analise problemas técnicos, escreva código limpo, edite arquivos se necessário e apresente soluções prontas.",
-            "operator" => "Operador Windows — execute automações locais, verifique arquivos/processos ou controle o navegador conforme solicitado com segurança.",
+            "operator" => "Operador Windows — execute automações locais e verifique arquivos ou processos conforme solicitado com segurança.",
             "planner" => "Estrategista e Planejador — decomponha o objetivo em etapas concretas, prioridades, riscos e próximos passos acionáveis.",
             _ => "Agente Autônomo J.A.R.V.I.S. — execute a missão solicitada com máxima clareza, precisão e iniciativa.",
         }
@@ -900,6 +1018,21 @@ pub fn spawn_background_agent(
         {
             let mut map = state.agent_cancels.lock().await;
             map.insert(agent_id.clone(), cancel_tx);
+        }
+        {
+            let mut runs = state.agent_runs.lock().await;
+            runs.push(crate::state::AgentRunSnapshot {
+                id: agent_id.clone(),
+                role: normalized_role.to_string(),
+                name: display_name.clone(),
+                task: clean_task.clone(),
+                status: "running".to_string(),
+                output: String::new(),
+            });
+            if runs.len() > 16 {
+                let drain_count = runs.len() - 16;
+                runs.drain(0..drain_count);
+            }
         }
 
         let _ = app.emit(
@@ -915,6 +1048,8 @@ pub fn spawn_background_agent(
         let app_clone = app.clone();
         let state_arc = Arc::clone(state);
         let spawned_id = agent_id.clone();
+        let display_name_clone = display_name.clone();
+        let task_clone = clean_task.clone();
 
         tokio::spawn(async move {
             let result = run_agent_turn(
@@ -934,6 +1069,15 @@ pub fn spawn_background_agent(
 
             match result {
                 Ok((reply_text, response_mode, traces)) => {
+                    {
+                        let mut runs = state_arc.agent_runs.lock().await;
+                        if let Some(entry) = runs.iter_mut().find(|r| r.id == spawned_id) {
+                            entry.status = "done".to_string();
+                            entry.output = reply_text.clone();
+                        }
+                    }
+                    let (spoken_summary, card_summary) =
+                        build_concise_agent_speech(&display_name_clone, &reply_text);
                     let msg = StoredMessage {
                         id: Uuid::new_v4().to_string(),
                         role: "assistant".to_string(),
@@ -950,8 +1094,25 @@ pub fn spawn_background_agent(
                             "message": msg
                         }),
                     );
+                    let _ = app_clone.emit(
+                        "jarvis:agent-completed-summary",
+                        json!({
+                            "agentId": spawned_id,
+                            "agentName": display_name_clone,
+                            "task": task_clone,
+                            "spokenSummary": spoken_summary,
+                            "cardSummary": card_summary
+                        }),
+                    );
                 }
                 Err(err) if err == "CANCELLED" => {
+                    {
+                        let mut runs = state_arc.agent_runs.lock().await;
+                        if let Some(entry) = runs.iter_mut().find(|r| r.id == spawned_id) {
+                            entry.status = "cancelled".to_string();
+                            entry.output = "Cancelado pelo usuário.".to_string();
+                        }
+                    }
                     let _ = app_clone.emit(
                         "jarvis:chat-event",
                         json!({
@@ -961,6 +1122,13 @@ pub fn spawn_background_agent(
                     );
                 }
                 Err(err) => {
+                    {
+                        let mut runs = state_arc.agent_runs.lock().await;
+                        if let Some(entry) = runs.iter_mut().find(|r| r.id == spawned_id) {
+                            entry.status = "error".to_string();
+                            entry.output = err.clone();
+                        }
+                    }
                     let _ = app_clone.emit(
                         "jarvis:chat-event",
                         json!({

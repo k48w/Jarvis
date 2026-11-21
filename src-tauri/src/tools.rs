@@ -236,7 +236,7 @@ pub fn tool_catalog() -> Vec<ToolSpec> {
         ToolSpec {
             name: "browser_navigate",
             title: "Navegar no navegador embutido",
-            description: "Abre ou navega o navegador WebView2 integrado do J.A.R.V.I.S. para qualquer site (Google, YouTube, GitHub, lojas, etc.) ou busca, retornando os elementos clicáveis numerados [1..N] e texto da página.",
+            description: "Abre o painel visual do navegador WebView2 integrado. Use APENAS quando o usuário pedir explicitamente para abrir/mostrar o navegador ou interagir visualmente com um site (ex: WhatsApp Web, YouTube, login). Para pesquisas comuns, notícias ou fatos, NÃO use esta ferramenta — use web_search ou fetch_webpage.",
             risk: ToolRisk::Read,
             parameters: || json!({
                 "type": "object",
@@ -338,7 +338,7 @@ pub fn tool_catalog() -> Vec<ToolSpec> {
         ToolSpec {
             name: "spawn_agent",
             title: "Criar subagente em paralelo",
-            description: "Cria e executa um subagente especializado em segundo plano (research, coder, operator, planner) e faz a aba Agentes aparecer automaticamente para o usuário acompanhar.",
+            description: "Cria e executa um NOVO subagente em segundo plano (research, coder, operator, planner). NUNCA chame esta ferramenta se o usuário apenas perguntar se um agente já terminou — para consultar o andamento ou resultado de um agente, use check_agents.",
             risk: ToolRisk::Read,
             parameters: || json!({
                 "type": "object",
@@ -348,6 +348,16 @@ pub fn tool_catalog() -> Vec<ToolSpec> {
                     "task": { "type": "string", "description": "Missão completa que o agente deve executar." }
                 },
                 "required": ["role", "task"]
+            }),
+        },
+        ToolSpec {
+            name: "check_agents",
+            title: "Consultar status dos subagentes",
+            description: "Consulta o status atual e o relatório/resultado dos subagentes em segundo plano (em andamento ou concluídos). Use SEMPRE que o usuário perguntar se o agente já terminou ou pedir o resumo do que o agente descobriu, sem criar outro agente.",
+            risk: ToolRisk::Read,
+            parameters: || json!({
+                "type": "object",
+                "properties": {}
             }),
         },
         ToolSpec {
@@ -1402,73 +1412,153 @@ pub async fn execute_tool_with_policy(
         }
         "browser_navigate" => {
             let url = args["url"].as_str().unwrap_or("");
-            let _ = app.emit(
-                "jarvis:browser-panel",
-                json!({ "open": true, "url": url }),
-            );
-            tokio::time::sleep(Duration::from_millis(220)).await;
-            match browser::navigate(app, url).await {
-                Ok(info) => {
-                    let _ = app.emit(
-                        "jarvis:browser-panel",
-                        json!({ "open": true, "url": info.url, "title": info.title }),
-                    );
-                    Ok(browser::format_inspect_for_llm(&info))
+            if conversation_id.starts_with("agent:") {
+                if url.starts_with("http://") || url.starts_with("https://") {
+                    run_fetch_webpage(state, url).await
+                } else {
+                    run_web_search(state, url).await
                 }
-                Err(e) => Err(e),
+            } else {
+                let _ = app.emit(
+                    "jarvis:browser-panel",
+                    json!({ "open": true, "url": url }),
+                );
+                tokio::time::sleep(Duration::from_millis(220)).await;
+                match browser::navigate(app, url).await {
+                    Ok(info) => {
+                        let _ = app.emit(
+                            "jarvis:browser-panel",
+                            json!({ "open": true, "url": info.url, "title": info.title }),
+                        );
+                        Ok(browser::format_inspect_for_llm(&info))
+                    }
+                    Err(e) => Err(e),
+                }
             }
         }
         "browser_inspect" => {
-            let _ = app.emit("jarvis:browser-panel", json!({ "open": true }));
-            match browser::inspect_page(app, false).await {
-                Ok(info) => Ok(browser::format_inspect_for_llm(&info)),
-                Err(e) => Err(e),
+            if conversation_id.starts_with("agent:") {
+                Ok("Subagente em segundo plano não utiliza o navegador visual; use web_search ou fetch_webpage.".to_string())
+            } else {
+                let _ = app.emit("jarvis:browser-panel", json!({ "open": true }));
+                match browser::inspect_page(app, false).await {
+                    Ok(info) => Ok(browser::format_inspect_for_llm(&info)),
+                    Err(e) => Err(e),
+                }
             }
         }
         "browser_click" => {
-            let _ = app.emit("jarvis:browser-panel", json!({ "open": true }));
-            let element_id = args["element_id"].as_u64().map(|v| v as u32);
-            let text = args["text"].as_str();
-            let x = args["x"].as_f64();
-            let y = args["y"].as_f64();
-            browser::click(app, element_id, text, x, y).await
+            if conversation_id.starts_with("agent:") {
+                Ok("Subagente em segundo plano não utiliza o navegador visual; use web_search ou fetch_webpage.".to_string())
+            } else {
+                let _ = app.emit("jarvis:browser-panel", json!({ "open": true }));
+                let element_id = args["element_id"].as_u64().map(|v| v as u32);
+                let text = args["text"].as_str();
+                let x = args["x"].as_f64();
+                let y = args["y"].as_f64();
+                browser::click(app, element_id, text, x, y).await
+            }
         }
         "browser_type" => {
-            let _ = app.emit("jarvis:browser-panel", json!({ "open": true }));
-            let text = args["text"].as_str().unwrap_or("");
-            let element_id = args["element_id"].as_u64().map(|v| v as u32);
-            let target_label = args["target_label"].as_str();
-            let clear_first = args["clear_first"].as_bool().unwrap_or(true);
-            let press_enter = args["press_enter"].as_bool().unwrap_or(false);
-            browser::type_text(app, text, element_id, target_label, clear_first, press_enter).await
+            if conversation_id.starts_with("agent:") {
+                Ok("Subagente em segundo plano não utiliza o navegador visual; use web_search ou fetch_webpage.".to_string())
+            } else {
+                let _ = app.emit("jarvis:browser-panel", json!({ "open": true }));
+                let text = args["text"].as_str().unwrap_or("");
+                let element_id = args["element_id"].as_u64().map(|v| v as u32);
+                let target_label = args["target_label"].as_str();
+                let clear_first = args["clear_first"].as_bool().unwrap_or(true);
+                let press_enter = args["press_enter"].as_bool().unwrap_or(false);
+                browser::type_text(app, text, element_id, target_label, clear_first, press_enter).await
+            }
         }
         "browser_scroll" => {
-            let direction = args["direction"].as_str().unwrap_or("down");
-            let amount = args["amount"].as_i64().map(|v| v as i32);
-            browser::scroll_page(app, direction, amount).await
+            if conversation_id.starts_with("agent:") {
+                Ok("Subagente em segundo plano não utiliza o navegador visual.".to_string())
+            } else {
+                let direction = args["direction"].as_str().unwrap_or("down");
+                let amount = args["amount"].as_i64().map(|v| v as i32);
+                browser::scroll_page(app, direction, amount).await
+            }
         }
         "browser_press_key" => {
-            let key = args["key"].as_str().unwrap_or("Enter");
-            browser::press_key(app, key).await
+            if conversation_id.starts_with("agent:") {
+                Ok("Subagente em segundo plano não utiliza o navegador visual.".to_string())
+            } else {
+                let key = args["key"].as_str().unwrap_or("Enter");
+                browser::press_key(app, key).await
+            }
         }
-        "browser_back" => match browser::go_back(app).await {
-            Ok(st) => Ok(format!("Voltou para: {} ({})", st.title, st.url)),
-            Err(e) => Err(e),
-        },
+        "browser_back" => {
+            if conversation_id.starts_with("agent:") {
+                Ok("Subagente em segundo plano não utiliza o navegador visual.".to_string())
+            } else {
+                match browser::go_back(app).await {
+                    Ok(st) => Ok(format!("Voltou para: {} ({})", st.title, st.url)),
+                    Err(e) => Err(e),
+                }
+            }
+        }
         "browser_close" => {
             let _ = browser::set_visible(app, false).await;
             let _ = app.emit("jarvis:browser-panel", json!({ "open": false }));
             Ok("Navegador embutido fechado.".to_string())
         }
         "spawn_agent" => {
-            let role = args["role"].as_str().unwrap_or("research");
-            let agent_name = args["name"].as_str();
-            let task = args["task"].as_str().unwrap_or("");
-            match crate::llm::spawn_background_agent(app, state, role, agent_name, task).await {
-                Ok(id) => Ok(format!(
-                    "Subagente criado e iniciado em segundo plano (id: {id}). A aba Agentes apareceu automaticamente no topo para o usuário acompanhar em tempo real."
-                )),
-                Err(e) => Err(e),
+            if conversation_id.starts_with("agent:") {
+                Ok("Subagente não pode criar outros subagentes; conclua a tarefa diretamente.".to_string())
+            } else {
+                let role = args["role"].as_str().unwrap_or("research");
+                let agent_name = args["name"].as_str();
+                let task = args["task"].as_str().unwrap_or("");
+                match crate::llm::spawn_background_agent(app, state, role, agent_name, task).await {
+                    Ok(id) if id.starts_with("ALREADY_RUNNING:") => {
+                        let rest = id.trim_start_matches("ALREADY_RUNNING:");
+                        let mut parts = rest.splitn(3, ':');
+                        let existing_id = parts.next().unwrap_or("agent");
+                        let existing_name = parts.next().unwrap_or("Agente");
+                        let existing_task = parts.next().unwrap_or("");
+                        Ok(format!(
+                            "O subagente '{existing_name}' ({existing_id}) já está em andamento executando '{existing_task}'. Não foi criado outro agente duplicado; informe o usuário que ele ainda está trabalhando."
+                        ))
+                    }
+                    Ok(id) => Ok(format!(
+                        "Subagente criado e iniciado em segundo plano (id: {id}). A aba Agentes apareceu automaticamente no topo para o usuário acompanhar em tempo real."
+                    )),
+                    Err(e) => Err(e),
+                }
+            }
+        }
+        "check_agents" => {
+            let runs = state.agent_runs.lock().await;
+            if runs.is_empty() {
+                Ok("Nenhum subagente foi iniciado nesta sessão.".to_string())
+            } else {
+                let mut lines = Vec::new();
+                for r in runs.iter().rev().take(6) {
+                    let status_pt = match r.status.as_str() {
+                        "running" => "EM ANDAMENTO",
+                        "done" => "CONCLUÍDO",
+                        "cancelled" => "CANCELADO",
+                        _ => "ERRO",
+                    };
+                    if r.output.trim().is_empty() {
+                        lines.push(format!(
+                            "- [{}] {} ({}) · Missão: {}",
+                            status_pt, r.name, r.role, r.task
+                        ));
+                    } else {
+                        let snippet: String = r.output.chars().take(700).collect();
+                        lines.push(format!(
+                            "- [{}] {} ({}) · Missão: {}\n  Resultado: {}",
+                            status_pt, r.name, r.role, r.task, snippet
+                        ));
+                    }
+                }
+                Ok(format!(
+                    "Status dos subagentes em segundo plano:\n{}",
+                    lines.join("\n\n")
+                ))
             }
         }
         "list_open_windows" => {

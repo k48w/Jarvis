@@ -71,6 +71,7 @@ import {
   logoutChatgpt,
   logoutGoogle,
   onAgentSpawned,
+  onAgentCompletedSummary,
   onBrowserPanel,
   onChatEvent,
   onFileDiff,
@@ -1333,6 +1334,38 @@ function App() {
     let unChat: (() => void) | undefined;
     let unApprove: (() => void) | undefined;
     let unTimer: (() => void) | undefined;
+    let unAgentSummary: (() => void) | undefined;
+
+    void onAgentCompletedSummary((ev) => {
+      notifyMascot(ev.spokenSummary, "cheer");
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `agent-summary-${ev.agentId}`,
+          role: "assistant",
+          text: `**Resumo do agente ${ev.agentName}:**\n\n${ev.cardSummary}`,
+          timestamp: new Date().toISOString(),
+          mode: "responding",
+          tool_events: [],
+        } as (typeof messages)[number],
+      ]);
+      if (
+        isTauri &&
+        configRef.current.tts_engine !== "off" &&
+        keyStatusRef.current.elevenlabs.configured &&
+        !mutedRef.current &&
+        !isStreamingRef.current
+      ) {
+        const speech = getSpeechQueue();
+        speech.setEnabled(true);
+        speech.setLevel(volumeRef.current, mutedRef.current);
+        speech.reset();
+        speech.pushDelta(ev.spokenSummary);
+        speech.finish();
+      }
+    }).then((fn) => {
+      unAgentSummary = fn;
+    });
     let unTray: (() => void) | undefined;
     let unAgent: (() => void) | undefined;
     let unBrowserPanel: (() => void) | undefined;
@@ -1622,6 +1655,7 @@ function App() {
       unChat?.();
       unApprove?.();
       unTimer?.();
+      unAgentSummary?.();
       unTray?.();
       unAgent?.();
       unBrowserPanel?.();
