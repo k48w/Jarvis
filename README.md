@@ -1,4 +1,6 @@
-# J.A.R.V.I.S. — The Singularity Edition
+# <img src="docs/app-icon.jpg" width="38" align="center" alt="J.A.R.V.I.S. Icon" /> J.A.R.V.I.S. — The Singularity Edition
+
+![Hero Banner — J.A.R.V.I.S. V8.0](docs/hero-orb.jpg)
 
 ![Tauri 2](https://img.shields.io/badge/Tauri-2.x-24C8DB?logo=tauri&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-Native%20Win32-DEA584?logo=rust&logoColor=black)
@@ -40,6 +42,9 @@ Assistente pessoal cinematográfico de desktop para **Windows**, construído em 
 - **Menu rápido no botão direito**: *Ver tela agora*, *Wake Word ON/OFF*, *Silenciar*, *Trocar cor do núcleo*, *Abrir J.A.R.V.I.S.* e *Ocultar*.
 
 ### 🎙️ Voz Nativa em Rust, `"Ei, Jarvis"` & Modo Mãos-Livres
+
+![Frequência de Voz J.A.R.V.I.S.](docs/voice-wave.jpg)
+
 - **Captura nativa Win32 (`waveIn` 16 kHz PCM)**: acessa seu microfone diretamente pelo Windows sem depender de permissões do WebView2 — funciona inclusive minimizado na bandeja ou atrás de jogos.
 - **Wake Word `"Ei, Jarvis"`** com VAD local (**zero envio/custo durante o silêncio**) + botão de ativação rápida no topo com indicador ao vivo de captação.
 - **Modo Mãos-Livres**: conversa contínua automática após cada resposta (diga *"parar"* ou *"tchau"* para encerrar).

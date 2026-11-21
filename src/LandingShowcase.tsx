@@ -184,6 +184,7 @@ export function LandingShowcase({
   onEnterSimulator: () => void;
 }) {
   const [demoState, setDemoState] = useState<CoreState>("responding");
+  const [heroVisualMode, setHeroVisualMode] = useState<"studio" | "live3d">("studio");
   const [activePillar, setActivePillar] = useState<PillarId>("vision");
   const [activeSlide, setActiveSlide] = useState<string>("cockpit");
   const [copiedCmd, setCopiedCmd] = useState(false);
@@ -198,6 +199,7 @@ export function LandingShowcase({
 
   function selectDemoState(next: CoreState) {
     setDemoState(next);
+    setHeroVisualMode("live3d");
     try {
       sfxRef.current ??= new AudioEngine();
       sfxRef.current.setLevel(0.38, false);
@@ -250,9 +252,9 @@ export function LandingShowcase({
       {/* Sticky Glass Navbar */}
       <header className="lp-navbar">
         <div className="lp-nav-brand">
-          <Aperture className="lp-brand-icon" />
+          <img src="/app-icon.jpg" alt="" className="lp-app-emblem" />
           <strong>J.A.R.V.I.S.</strong>
-          <span className="lp-version-tag">V8.0 SINGULARITY</span>
+          <span className="lp-version-tag">V8.0</span>
         </div>
 
         <nav className="lp-nav-links" aria-label="Navegação do site">
@@ -363,35 +365,59 @@ export function LandingShowcase({
           </div>
         </div>
 
-        {/* Interactive 3D Cockpit Stage Preview */}
+        {/* Minimalist Studio Orb + Interactive 3D Cockpit Stage Preview */}
         <div className="lp-hero-stage-card">
           <div className="lp-stage-topbar">
-            <div className="lp-window-dots">
-              <i />
-              <i />
-              <i />
+            <div className="lp-visual-mode-pills">
+              <button
+                type="button"
+                className={heroVisualMode === "studio" ? "lp-vmode-btn active" : "lp-vmode-btn"}
+                onClick={() => setHeroVisualMode("studio")}
+              >
+                Esfera Minimalista
+              </button>
+              <button
+                type="button"
+                className={heroVisualMode === "live3d" ? "lp-vmode-btn active" : "lp-vmode-btn"}
+                onClick={() => setHeroVisualMode("live3d")}
+              >
+                WebGL 3D Interativo
+              </button>
             </div>
-            <span className="lp-stage-title">
-              J.A.R.V.I.S. COCKPIT · {currentDemo.label.toUpperCase()}
-            </span>
             <button
               type="button"
               className="lp-stage-expand"
               onClick={onEnterSimulator}
             >
-              Abrir tela inteira <ArrowRight />
+              Simulador Completo <ArrowRight />
             </button>
           </div>
 
           <div className="lp-stage-viewport">
-            <Stage
-              state={demoState}
-              quality="High"
-              theme={theme}
-              reduced={false}
-              audioLevel={demoAudioRef}
-            />
-            <HudOverlay state={demoState} immersive={false} />
+            {heroVisualMode === "studio" ? (
+              <div
+                className="lp-studio-orb-wrap"
+                onClick={() => setHeroVisualMode("live3d")}
+                title="Clique para interagir com o shader 3D em tempo real"
+              >
+                <img
+                  src="/hero-orb.jpg"
+                  alt="Esfera minimalista de vidro fumê do J.A.R.V.I.S."
+                  className="lp-studio-orb-img"
+                />
+              </div>
+            ) : (
+              <>
+                <Stage
+                  state={demoState}
+                  quality="High"
+                  theme={theme}
+                  reduced={false}
+                  audioLevel={demoAudioRef}
+                />
+                <HudOverlay state={demoState} immersive={false} />
+              </>
+            )}
 
             <div className="lp-stage-hud-caption">
               <span className="lp-state-badge">
@@ -400,13 +426,15 @@ export function LandingShowcase({
               <p>{currentDemo.caption}</p>
             </div>
 
-            <div className="lp-stage-spectrum">
-              <VoiceSpectrum
-                state={demoState}
-                audioLevel={demoAudioRef}
-                active={demoState !== "idle"}
-              />
-            </div>
+            {heroVisualMode === "live3d" && (
+              <div className="lp-stage-spectrum">
+                <VoiceSpectrum
+                  state={demoState}
+                  audioLevel={demoAudioRef}
+                  active={demoState !== "idle"}
+                />
+              </div>
+            )}
 
             <MiniMascotPreview mode={demoState} bubble={currentDemo.bubble} />
           </div>
@@ -427,6 +455,11 @@ export function LandingShowcase({
           </div>
         </div>
       </section>
+
+      {/* MINIMALIST VOICE FREQUENCY RIBBON DIVIDER */}
+      <div className="lp-voice-ribbon" aria-hidden="true">
+        <img src="/voice-wave.jpg" alt="" />
+      </div>
 
       {/* 4 INTERACTIVE ENGINEERING PILLARS */}
       <section id="pilares" className="lp-section">
@@ -968,7 +1001,7 @@ npm run tauri -- build`}</code>
 
       <footer className="lp-footer">
         <div className="lp-nav-brand">
-          <Aperture className="lp-brand-icon" />
+          <img src="/app-icon.jpg" alt="" className="lp-app-emblem" />
           <strong>J.A.R.V.I.S. V8.0 — The Singularity Edition</strong>
         </div>
         <div className="lp-footer-links">
