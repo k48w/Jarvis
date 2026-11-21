@@ -131,4 +131,6 @@ node tests/desktop.mjs
 
 ## Licença
 
+Veja também a documentação técnica detalhada com diagramas Mermaid em [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) e o histórico de versões em [CHANGELOG.md](CHANGELOG.md).
+
 Distribuído sob a licença **MIT**. Veja [LICENSE](LICENSE) para mais detalhes.
