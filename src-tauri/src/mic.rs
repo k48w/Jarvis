@@ -637,4 +637,23 @@ mod tests {
         );
         assert_eq!(parse_wake_command_rust("bom dia pessoal"), None);
     }
+
+    #[test]
+    fn rms_computation_and_phonetic_wake_variants_work() {
+        assert_eq!(compute_rms(&[]), 0.0);
+        let silence = vec![0i16; 640];
+        assert!(compute_rms(&silence) < 0.0001);
+        let tone = vec![16384i16; 640];
+        assert!((compute_rms(&tone) - 0.5).abs() < 0.01);
+
+        // Common Portuguese ASR phonetic variants for "Jarvis"
+        assert_eq!(
+            parse_wake_command_rust("Oi Jarves, abre o navegador"),
+            Some("abre o navegador".to_string())
+        );
+        assert_eq!(
+            parse_wake_command_rust("Fala Javes!"),
+            Some(String::new())
+        );
+    }
 }
