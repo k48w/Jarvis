@@ -1,3 +1,11 @@
+//! # Estado Compartilhado do Aplicativo — `state.rs`
+//!
+//! Mantém o estado concorrente (`AppState`) compartilhado entre comandos Tauri,
+//! loops de agentes, timers e o servidor Companion:
+//! - `cancel_gen` / `active_cancel`: controle determinístico de cancelamento de chat por geração.
+//! - `pending_approvals`: fila única de aprovações 2FA (desktop + celular) vinculada à geração.
+//! - `agent_runs` e `timers`: snapshots em tempo real de subagentes e cronômetros.
+
 use crate::config::AppConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -234,7 +242,7 @@ mod tests {
             .await;
         assert!(state.first_pending_approval().await.is_some());
         assert!(state.resolve_approval("req-1", true).await);
-        assert_eq!(rx1.await.unwrap(), true);
+        assert!(rx1.await.unwrap());
         // Duplicate resolution must safely return false without breaking state
         assert!(!state.resolve_approval("req-1", false).await);
         assert!(state.first_pending_approval().await.is_none());
@@ -245,7 +253,7 @@ mod tests {
             .register_approval("req-2".into(), json!({"approvalId": "req-2"}), tx2)
             .await;
         assert!(state.resolve_approval("req-2", false).await);
-        assert_eq!(rx2.await.unwrap(), false);
+        assert!(!rx2.await.unwrap());
         assert!(state.first_pending_approval().await.is_none());
     }
 }

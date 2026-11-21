@@ -39,7 +39,7 @@ jobs:
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 
       - name: Run Clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 
       - name: Run Rust unit & Companion protocol integration tests
         run: cargo test --manifest-path src-tauri/Cargo.toml

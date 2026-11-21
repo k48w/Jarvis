@@ -1,3 +1,9 @@
+//! # Navegador Integrado (WebView2 & CDP) — `browser.rs`
+//!
+//! Gerencia o painel de navegação WebView2 acoplado lado a lado na janela
+//! principal e expõe comandos de inspeção DOM, clique, digitação, rolagem e
+//! captura de elementos interativos numerados (`[1]`, `[2]`, ...).
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};

@@ -1,3 +1,13 @@
+/**
+ * # Gavetas Laterais de Conversas, Base RAG e Ajustes (`src/Drawers.tsx`)
+ *
+ * Contém dois componentes principais do cockpit:
+ * - `HistoryDrawer`: Gerencia Conversas, Projetos, Memórias de longo prazo e a
+ *   **Base de Conhecimento Local (RAG)** (indexação de pastas/arquivos e busca BM25).
+ * - `SettingsDrawer`: Configurações de IA (ChatGPT OAuth / Gemini), Voz (ElevenLabs /
+ *   Wake Word), Sistema (Permissões, Atalho Global e **Auto-Updater GitHub Releases**),
+ *   Visual (Temas e Qualidade 3D) e Celular (**Jarvis Companion** via LAN, Tailscale ou Túnel HTTPS).
+ */
 import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import {
@@ -14,6 +24,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Search,
   ShieldCheck,
   Smartphone,
   Trash2,
@@ -24,13 +35,22 @@ import {
 import { listAudioInputDevices, openMicStream } from "./voice";
 import {
   allowCompanionFirewall,
+  checkAppUpdate,
   getCompanionInfo,
+  indexKnowledgePath,
+  installAppUpdate,
   isTauri,
+  listKnowledgeSources,
   listMicrophones,
   onMicTestError,
   onMicTestLevel,
+  onUpdateProgress,
+  pickProjectFolder,
   regenerateCompanionToken,
+  removeKnowledgeSource,
+  searchKnowledgeBase,
   setCompanionEnabled,
+  setCompanionExternalUrl,
   setCompanionLanEnabled,
   startNativeMicTest,
   stopNativeMicTest,
@@ -44,6 +64,8 @@ import {
   type GeminiAuthMode,
   type GoogleAuthStatus,
   type KeySlot,
+  type KnowledgeHit,
+  type KnowledgeSourceSummary,
   type MemoryItem,
   type PermissionMode,
   type ProjectItem,
@@ -52,11 +74,13 @@ import {
   type SttEngine,
   type TtsEngine,
   type TtsReplyMode,
+  type UpdateCheckResult,
+  type UpdateProgressEvent,
 } from "./bridge";
 import type { VisualTheme } from "./Stage";
 
 export type Quality = "Low" | "High" | "Ultra";
-export type HistoryTab = "conversations" | "memory";
+export type HistoryTab = "conversations" | "memory" | "knowledge";
 export type SettingsTab = "ai" | "voice" | "system" | "visual" | "mobile";
 
 interface HistoryDrawerProps {
@@ -109,6 +133,100 @@ export function HistoryDrawer({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [convSearch, setConvSearch] = useState("");
+
+  // Base de Conhecimento Local (RAG)
+  const [kbSources, setKbSources] = useState<KnowledgeSourceSummary[]>([]);
+  const [kbPathDraft, setKbPathDraft] = useState("");
+  const [kbQueryDraft, setKbQueryDraft] = useState("");
+  const [kbHits, setKbHits] = useState<KnowledgeHit[]>([]);
+  const [kbBusy, setKbBusy] = useState(false);
+  const [kbStatus, setKbStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    void listKnowledgeSources()
+      .then(setKbSources)
+      .catch(() => {});
+  }, [tab]);
+
+  async function handleIndexFolderPicker() {
+    setKbStatus(null);
+    setKbBusy(true);
+    try {
+      const picked = await pickProjectFolder();
+      if (!picked) {
+        setKbBusy(false);
+        return;
+      }
+      const sum = await indexKnowledgePath(picked);
+      const next = await listKnowledgeSources();
+      setKbSources(next);
+      setKbStatus(
+        `Indexado '${sum.name}': ${sum.fileCount} arquivo(s), ${sum.chunkCount} blocos.`,
+      );
+    } catch (err) {
+      setKbStatus(String(err));
+    } finally {
+      setKbBusy(false);
+    }
+  }
+
+  async function handleIndexManualKbPath(e: React.FormEvent) {
+    e.preventDefault();
+    const clean = kbPathDraft.trim();
+    if (!clean) return;
+    setKbStatus(null);
+    setKbBusy(true);
+    try {
+      const sum = await indexKnowledgePath(clean);
+      setKbPathDraft("");
+      const next = await listKnowledgeSources();
+      setKbSources(next);
+      setKbStatus(
+        `Indexado '${sum.name}': ${sum.fileCount} arquivo(s), ${sum.chunkCount} blocos.`,
+      );
+    } catch (err) {
+      setKbStatus(String(err));
+    } finally {
+      setKbBusy(false);
+    }
+  }
+
+  async function handleSearchKb(e: React.FormEvent) {
+    e.preventDefault();
+    const q = kbQueryDraft.trim();
+    if (!q) {
+      setKbHits([]);
+      return;
+    }
+    setKbBusy(true);
+    setKbStatus(null);
+    try {
+      const results = await searchKnowledgeBase(q, 6);
+      setKbHits(results);
+      if (results.length === 0) {
+        setKbStatus(`Nenhum trecho encontrado para "${q}".`);
+      }
+    } catch (err) {
+      setKbStatus(String(err));
+    } finally {
+      setKbBusy(false);
+    }
+  }
+
+  async function handleRemoveKbSource(id: string) {
+    setKbBusy(true);
+    setKbStatus(null);
+    try {
+      await removeKnowledgeSource(id);
+      const next = await listKnowledgeSources();
+      setKbSources(next);
+      setKbHits((prev) => prev.filter((h) => h.sourceId !== id));
+    } catch (err) {
+      setKbStatus(String(err));
+    } finally {
+      setKbBusy(false);
+    }
+  }
 
   async function submitMemory(e: React.FormEvent) {
     e.preventDefault();
@@ -288,6 +406,14 @@ export function HistoryDrawer({
         >
           Memória ({memories.length})
         </button>
+        <button
+          role="tab"
+          aria-selected={tab === "knowledge"}
+          className={tab === "knowledge" ? "tab active" : "tab"}
+          onClick={() => onTabChange("knowledge")}
+        >
+          Base RAG ({kbSources.length})
+        </button>
       </div>
 
       {tab === "conversations" ? (
@@ -463,7 +589,7 @@ export function HistoryDrawer({
             )}
           </div>
         </div>
-      ) : (
+      ) : tab === "memory" ? (
         <div className="drawer-body">
           <form className="memory-form" onSubmit={(e) => void submitMemory(e)}>
             <input
@@ -497,6 +623,119 @@ export function HistoryDrawer({
                 </div>
               ))
             )}
+          </div>
+        </div>
+      ) : (
+        <div className="drawer-body">
+          <div className="conv-top-actions">
+            <button
+              type="button"
+              className="mini-btn accent"
+              disabled={kbBusy}
+              onClick={() => void handleIndexFolderPicker()}
+            >
+              <FolderPlus /> Indexar pasta local
+            </button>
+          </div>
+
+          <form className="memory-form" onSubmit={(e) => void handleIndexManualKbPath(e)}>
+            <input
+              type="text"
+              value={kbPathDraft}
+              placeholder="Caminho de pasta ou arquivo (ex: C:\Projetos\meu-app)"
+              aria-label="Caminho para indexar na Base RAG"
+              onChange={(e) => setKbPathDraft(e.target.value)}
+            />
+            <button type="submit" className="mini-btn accent" disabled={kbBusy}>
+              Indexar
+            </button>
+          </form>
+
+          <form className="memory-form" onSubmit={(e) => void handleSearchKb(e)}>
+            <input
+              type="search"
+              value={kbQueryDraft}
+              placeholder="Pesquisar nos arquivos indexados (BM25 + código)…"
+              aria-label="Pesquisar na Base RAG"
+              onChange={(e) => setKbQueryDraft(e.target.value)}
+            />
+            <button type="submit" className="mini-btn" disabled={kbBusy}>
+              <Search size={14} /> Buscar
+            </button>
+          </form>
+
+          {kbStatus && <small className="hint-line">{kbStatus}</small>}
+
+          {kbHits.length > 0 && (
+            <div className="project-section">
+              <div className="section-kicker">
+                Trechos Encontrados ({kbHits.length})
+              </div>
+              <div className="memory-list">
+                {kbHits.map((hit) => (
+                  <div
+                    key={hit.chunkId}
+                    className="memory-item"
+                    style={{ flexDirection: "column", alignItems: "stretch", gap: "6px" }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px" }}>
+                      <strong>
+                        {hit.relativePath} (L{hit.startLine}–L{hit.endLine})
+                      </strong>
+                      <span>Score {hit.score.toFixed(2)}</span>
+                    </div>
+                    <pre
+                      style={{
+                        margin: 0,
+                        padding: "8px",
+                        borderRadius: "8px",
+                        background: "rgba(0,0,0,0.35)",
+                        fontSize: "11.5px",
+                        whiteSpace: "pre-wrap",
+                        maxHeight: "140px",
+                        overflowY: "auto",
+                      }}
+                    >
+                      {hit.snippet}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="project-section">
+            <div className="section-kicker">
+              Fontes Indexadas ({kbSources.length})
+            </div>
+            <div className="memory-list">
+              {kbSources.length === 0 ? (
+                <p className="empty-hint">
+                  Nenhuma pasta ou documento indexado. Indexe um projeto acima ou peça no chat para o Jarvis consultar seus arquivos via RAG.
+                </p>
+              ) : (
+                kbSources.map((src) => (
+                  <div key={src.id} className="memory-item" title={src.path}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 }}>
+                      <strong>{src.name}</strong>
+                      <small style={{ opacity: 0.75, fontSize: "11.5px" }}>
+                        {src.fileCount} arquivo(s) · {src.chunkCount} chunks · {src.path}
+                      </small>
+                    </div>
+                    <button
+                      type="button"
+                      className="icon-tiny"
+                      aria-label={`Remover ${src.name} da Base RAG`}
+                      title="Remover da Base RAG"
+                      disabled={kbBusy}
+                      onClick={() => void handleRemoveKbSource(src.id)}
+                    >
+                      <Trash2 />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -616,6 +855,43 @@ export function SettingsDrawer({
   const [companionBusy, setCompanionBusy] = useState(false);
   const [companionMsg, setCompanionMsg] = useState<string | null>(null);
   const [copiedMobileUrl, setCopiedMobileUrl] = useState(false);
+  const [companionRoute, setCompanionRoute] = useState<"lan" | "tailscale" | "external">("lan");
+  const [externalUrlDraft, setExternalUrlDraft] = useState("");
+
+  // Auto-Updater (GitHub Releases)
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateMsg, setUpdateMsg] = useState<string | null>(null);
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgressEvent | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void onUpdateProgress((ev) => {
+      if (!disposed) setUpdateProgress(ev);
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  function resolveActivePairUrl(
+    info: CompanionInfo | null,
+    route: "lan" | "tailscale" | "external",
+  ): string {
+    if (!info) return "";
+    if (route === "tailscale" && info.tailscalePairUrl) {
+      return info.tailscalePairUrl;
+    }
+    if (route === "external" && info.externalPairUrl) {
+      return info.externalPairUrl;
+    }
+    return info.pairUrl;
+  }
 
   useEffect(() => {
     if (tab !== "mobile") return;
@@ -625,9 +901,11 @@ export function SettingsDrawer({
         .then(async (info) => {
           if (!active) return;
           setCompanionInfo(info);
+          setExternalUrlDraft((prev) => prev || info.externalUrl || "");
+          const targetUrl = resolveActivePairUrl(info, companionRoute);
           const dataUrl =
-            info.enabled && info.lanEnabled
-              ? await QRCode.toDataURL(info.pairUrl, {
+            info.enabled && (info.lanEnabled || companionRoute === "external")
+              ? await QRCode.toDataURL(targetUrl, {
                   width: 210,
                   margin: 2,
                   color: { dark: "#050811", light: "#ffffff" },
@@ -643,7 +921,7 @@ export function SettingsDrawer({
       active = false;
       clearInterval(id);
     };
-  }, [tab]);
+  }, [tab, companionRoute]);
 
   useEffect(() => {
     if (tab !== "voice") return;
@@ -1616,6 +1894,81 @@ export function SettingsDrawer({
               />
               Minimizar para a bandeja ao fechar janela
             </label>
+
+            <div className="field-block">
+              <div className="field-label-row">
+                <span>Atualizações do Aplicativo (GitHub Releases)</span>
+                <small>{updateCheck ? `v${updateCheck.currentVersion}` : "v8.0.0"}</small>
+              </div>
+              <div className="inline-row">
+                <button
+                  type="button"
+                  className="mini-btn"
+                  disabled={updateBusy}
+                  onClick={async () => {
+                    setUpdateBusy(true);
+                    setUpdateMsg(null);
+                    try {
+                      const res = await checkAppUpdate();
+                      setUpdateCheck(res);
+                      setUpdateMsg(
+                        res.updateAvailable
+                          ? `Nova versão v${res.latestVersion} disponível!`
+                          : `Você está na versão mais recente (v${res.latestVersion}).`,
+                      );
+                    } catch (err) {
+                      setUpdateMsg(String(err));
+                    } finally {
+                      setUpdateBusy(false);
+                    }
+                  }}
+                >
+                  {updateBusy ? <Loader2 className="spin" size={13} /> : <RefreshCw size={13} />}
+                  Verificar Atualização
+                </button>
+
+                {updateCheck?.installerUrl && (
+                  <button
+                    type="button"
+                    className="mini-btn accent"
+                    disabled={updateBusy}
+                    onClick={async () => {
+                      if (!updateCheck.installerUrl) return;
+                      setUpdateBusy(true);
+                      setUpdateMsg(null);
+                      setUpdateProgress(null);
+                      try {
+                        const msg = await installAppUpdate(
+                          updateCheck.installerUrl,
+                          updateCheck.installerName ?? "JARVIS-setup.exe",
+                        );
+                        setUpdateMsg(msg);
+                      } catch (err) {
+                        setUpdateMsg(String(err));
+                      } finally {
+                        setUpdateBusy(false);
+                      }
+                    }}
+                  >
+                    <Download size={13} />
+                    {updateCheck.updateAvailable
+                      ? `Atualizar para v${updateCheck.latestVersion}`
+                      : "Reinstalar Build do Release (.exe)"}
+                  </button>
+                )}
+              </div>
+              {updateProgress && (
+                <small className="hint-line">
+                  {updateProgress.stage === "launching"
+                    ? "Iniciando instalador…"
+                    : `Baixando instalador: ${updateProgress.percent}% (${(
+                        updateProgress.downloadedBytes /
+                        (1024 * 1024)
+                      ).toFixed(1)} MB)`}
+                </small>
+              )}
+              {updateMsg && <small className="hint-line">{updateMsg}</small>}
+            </div>
           </>
         )}
 
@@ -1772,7 +2125,92 @@ export function SettingsDrawer({
                   </span>
                 </div>
 
-                {companionInfo.lanEnabled && companionQr && (
+                <div className="field-block">
+                  <div className="field-label-row">
+                    <span>Rota de conexão do QR Code</span>
+                  </div>
+                  <div className="tabs" role="tablist" aria-label="Rota de pareamento">
+                    <button
+                      type="button"
+                      className={companionRoute === "lan" ? "tab active" : "tab"}
+                      onClick={() => setCompanionRoute("lan")}
+                    >
+                      Wi-Fi Local ({companionInfo.ip})
+                    </button>
+                    <button
+                      type="button"
+                      className={companionRoute === "tailscale" ? "tab active" : "tab"}
+                      disabled={!companionInfo.tailscaleIp}
+                      title={
+                        companionInfo.tailscaleIp
+                          ? `Tailscale VPN detectado (${companionInfo.tailscaleIp})`
+                          : "Tailscale não detectado neste PC"
+                      }
+                      onClick={() => setCompanionRoute("tailscale")}
+                    >
+                      Tailscale 4G/5G {companionInfo.tailscaleIp ? `(${companionInfo.tailscaleIp})` : "(Off)"}
+                    </button>
+                    <button
+                      type="button"
+                      className={companionRoute === "external" ? "tab active" : "tab"}
+                      onClick={() => setCompanionRoute("external")}
+                    >
+                      Túnel HTTPS
+                    </button>
+                  </div>
+                </div>
+
+                {companionRoute === "external" && (
+                  <div className="field-block">
+                    <div className="field-label-row">
+                      <span>URL do Túnel HTTPS (Tailscale Serve/Funnel ou Cloudflare Tunnel)</span>
+                    </div>
+                    <div className="inline-row">
+                      <input
+                        type="url"
+                        value={externalUrlDraft}
+                        placeholder="https://meu-pc.tailxxxx.ts.net"
+                        aria-label="URL externa HTTPS do Companion"
+                        onChange={(e) => setExternalUrlDraft(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="mini-btn accent"
+                        disabled={companionBusy}
+                        onClick={async () => {
+                          setCompanionBusy(true);
+                          setCompanionMsg(null);
+                          try {
+                            const next = await setCompanionExternalUrl(
+                              externalUrlDraft.trim() || null,
+                            );
+                            setCompanionInfo(next);
+                            const targetUrl = resolveActivePairUrl(next, "external");
+                            if (next.externalPairUrl) {
+                              const qr = await QRCode.toDataURL(targetUrl, {
+                                width: 210,
+                                margin: 2,
+                                color: { dark: "#050811", light: "#ffffff" },
+                              }).catch(() => "");
+                              setCompanionQr(qr);
+                              setCompanionMsg("URL de túnel HTTPS salva e QR Code atualizado.");
+                            } else {
+                              setCompanionMsg("URL de túnel removida.");
+                            }
+                          } catch (err) {
+                            setCompanionMsg(String(err));
+                          } finally {
+                            setCompanionBusy(false);
+                          }
+                        }}
+                      >
+                        Salvar URL
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {(companionInfo.lanEnabled || companionRoute === "external") && companionQr && (
                   <div className="companion-qr-card">
                     <img src={companionQr} alt="QR Code Jarvis Companion" />
                   </div>
@@ -1782,14 +2220,16 @@ export function SettingsDrawer({
                   <input
                     type="text"
                     readOnly
-                    value={companionInfo.pairUrl}
+                    value={resolveActivePairUrl(companionInfo, companionRoute)}
                     aria-label="URL de pareamento único"
                   />
                   <button
                     type="button"
                     className="mini-btn"
                     onClick={async () => {
-                      await navigator.clipboard.writeText(companionInfo.pairUrl);
+                      await navigator.clipboard.writeText(
+                        resolveActivePairUrl(companionInfo, companionRoute),
+                      );
                       setCopiedMobileUrl(true);
                       setTimeout(() => setCopiedMobileUrl(false), 1600);
                     }}

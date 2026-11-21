@@ -1,3 +1,9 @@
+/**
+ * # Painel de Subagentes Autônomos (`src/AgentsView.tsx`)
+ *
+ * Exibe o painel *Mission Control* (master-detail) para lançar, acompanhar
+ * e cancelar subagentes em background (Pesquisador, Programador, Automação).
+ */
 import { useEffect, useState } from "react";
 import {
   Bot,

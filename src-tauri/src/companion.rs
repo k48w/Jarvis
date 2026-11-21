@@ -1,3 +1,18 @@
+//! # Jarvis Companion (Servidor Mobile & Pareamento Remoto) — `companion.rs`
+//!
+//! Servidor HTTP/SSE assíncrono embutido no desktop para controle remoto via
+//! celular (PWA em `companion_ui.html`).
+//!
+//! ## Arquitetura de Segurança e Rede
+//! - **Desligado e local (`127.0.0.1`) por padrão**: Só faz bind em `0.0.0.0`
+//!   quando `enabled` e `lan_enabled` estão ativos.
+//! - **Suporte a Wi-Fi Local, Tailscale VPN (`100.64.0.0/10`) e Túnel HTTPS**:
+//!   Detecta automaticamente o IP da interface Tailscale para acesso no 4G/5G
+//!   fora de casa e aceita URL externa HTTPS (Tailscale Serve/Funnel ou Cloudflare Tunnel).
+//! - **Pareamento de Uso Único + Sessão `HttpOnly` (TTL 8h)**: O QR Code contém um
+//!   código descartável trocado em `POST /api/pair` por um cookie `HttpOnly; SameSite=Strict`
+//!   (acrescentando `; Secure` automaticamente quando acessado via túnel HTTPS).
+
 use crate::routines;
 use crate::state::AppState;
 use crate::storage;
@@ -5,7 +20,7 @@ use crate::tools;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::net::UdpSocket;
+use std::net::{IpAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -13,6 +28,7 @@ use tauri::{AppHandle, Emitter, Listener};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, watch, Mutex, RwLock, Semaphore};
+use url::Url;
 use uuid::Uuid;
 
 const COMPANION_HTML: &str = include_str!("companion_ui.html");
@@ -35,6 +51,10 @@ pub struct CompanionInfo {
     pub pair_url: String,
     pub pairing_code: String,
     pub connected_clients: usize,
+    pub tailscale_ip: Option<String>,
+    pub tailscale_pair_url: Option<String>,
+    pub external_url: Option<String>,
+    pub external_pair_url: Option<String>,
 }
 
 pub struct CompanionState {
@@ -42,6 +62,7 @@ pub struct CompanionState {
     pub lan_enabled: AtomicBool,
     pub pairing_code: RwLock<String>,
     pub sessions: RwLock<HashMap<String, Instant>>,
+    pub external_url: RwLock<Option<String>>,
     pub port: AtomicU16,
     pub connected_clients: AtomicUsize,
     pub events_tx: broadcast::Sender<String>,
@@ -63,6 +84,30 @@ fn normalize_code(raw: &str) -> String {
         .to_ascii_uppercase()
 }
 
+/// Valida e normaliza uma URL externa de túnel (ex.: Tailscale Funnel/Serve ou Cloudflare Tunnel).
+pub fn normalize_external_url(raw: &str) -> Result<Option<String>, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let parsed = Url::parse(trimmed).map_err(|e| format!("URL externa inválida: {e}"))?;
+    if !matches!(parsed.scheme(), "https" | "http") {
+        return Err("A URL do túnel deve começar com https:// ou http://".to_string());
+    }
+    let Some(host) = parsed.host_str() else {
+        return Err("A URL do túnel precisa conter um domínio ou IP válido.".to_string());
+    };
+    let mut base = format!("{}://{}", parsed.scheme(), host);
+    if let Some(port) = parsed.port() {
+        base.push_str(&format!(":{port}"));
+    }
+    let path = parsed.path().trim_end_matches('/');
+    if !path.is_empty() {
+        base.push_str(path);
+    }
+    Ok(Some(base))
+}
+
 impl CompanionState {
     pub fn new() -> Self {
         let (events_tx, _) = broadcast::channel(256);
@@ -72,6 +117,7 @@ impl CompanionState {
             lan_enabled: AtomicBool::new(false),
             pairing_code: RwLock::new(generate_pairing_code()),
             sessions: RwLock::new(HashMap::new()),
+            external_url: RwLock::new(None),
             port: AtomicU16::new(47821),
             connected_clients: AtomicUsize::new(0),
             events_tx,
@@ -123,6 +169,18 @@ impl CompanionState {
         };
         let pairing_code = self.pairing_code.read().await.clone();
         let pair_url = format!("http://{ip}:{port}/?pair={pairing_code}");
+        let tailscale_ip = if enabled && lan_enabled {
+            detect_tailscale_ip()
+        } else {
+            None
+        };
+        let tailscale_pair_url = tailscale_ip
+            .as_ref()
+            .map(|ts_ip| format!("http://{ts_ip}:{port}/?pair={pairing_code}"));
+        let external_url = self.external_url.read().await.clone();
+        let external_pair_url = external_url
+            .as_ref()
+            .map(|ext| format!("{ext}/?pair={pairing_code}"));
         CompanionInfo {
             enabled,
             lan_enabled,
@@ -132,6 +190,10 @@ impl CompanionState {
             pair_url,
             pairing_code,
             connected_clients: self.connected_clients.load(Ordering::SeqCst),
+            tailscale_ip,
+            tailscale_pair_url,
+            external_url,
+            external_pair_url,
         }
     }
 }
@@ -148,6 +210,23 @@ pub fn detect_lan_ip() -> String {
         }
     }
     "127.0.0.1".to_string()
+}
+
+/// Detecta o IPv4 da interface Tailscale (`100.64.0.0/10` CGNAT) consultando a tabela de rotas para o MagicDNS (`100.100.100.100`).
+pub fn detect_tailscale_ip() -> Option<String> {
+    let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("100.100.100.100:80").ok()?;
+    let addr = sock.local_addr().ok()?;
+    if let IpAddr::V4(v4) = addr.ip() {
+        let oct = v4.octets();
+        if oct[0] == 100 && (64..=127).contains(&oct[1]) {
+            let s = v4.to_string();
+            if s != detect_lan_ip() {
+                return Some(s);
+            }
+        }
+    }
+    None
 }
 
 pub fn allow_companion_firewall_port(port: u16) -> Result<String, String> {
@@ -497,12 +576,27 @@ pub(crate) async fn handle_client_core(
             let mut sessions = companion.sessions.write().await;
             sessions.insert(session_id.clone(), Instant::now());
         }
-        // The server is HTTP today, so Secure would prevent the mobile browser from
-        // sending the cookie. SameSite/HttpOnly still reduce script and cross-site risk;
-        // LAN mode is explicitly labeled as trusted-network-only in the UI.
-        let cookie_val = format!(
-            "jarvis_session={session_id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800"
-        );
+        // Quando o pareamento ocorre via túnel HTTPS (Tailscale Serve/Funnel, Cloudflare Tunnel),
+        // adiciona automaticamente a flag Secure ao cookie HttpOnly.
+        let is_https = req
+            .headers
+            .get("x-forwarded-proto")
+            .is_some_and(|p| p.eq_ignore_ascii_case("https"))
+            || req
+                .headers
+                .get("origin")
+                .is_some_and(|o| o.starts_with("https://"))
+            || req
+                .headers
+                .get("referer")
+                .is_some_and(|r| r.starts_with("https://"));
+        let cookie_val = if is_https {
+            format!(
+                "jarvis_session={session_id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800; Secure"
+            )
+        } else {
+            format!("jarvis_session={session_id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800")
+        };
         let _ = write_http_response(
             &mut stream,
             "200 OK",
@@ -743,8 +837,8 @@ pub(crate) async fn handle_client_core(
                 .unwrap_or_else(|| slug.to_string())
         } else {
             let raw = body["text"].as_str().unwrap_or("").trim().to_string();
-            if raw.starts_with('/') {
-                let mut parts = raw[1..].trim().splitn(2, char::is_whitespace);
+            if let Some(stripped) = raw.strip_prefix('/') {
+                let mut parts = stripped.trim().splitn(2, char::is_whitespace);
                 let slug = routines::normalize_slug(parts.next().unwrap_or(""));
                 let extra = parts.next().unwrap_or("").trim();
                 let skills = routines::list_skills(&app_state.data_dir).unwrap_or_default();
@@ -1208,13 +1302,10 @@ mod tests {
         );
         let r_app = send_raw_http(addr, &app_req).await;
         assert!(r_app.starts_with("HTTP/1.1 200"));
-        assert_eq!(
-            tokio::time::timeout(Duration::from_millis(500), rx1)
-                .await
-                .unwrap()
-                .unwrap(),
-            true
-        );
+        assert!(tokio::time::timeout(Duration::from_millis(500), rx1)
+            .await
+            .unwrap()
+            .unwrap());
 
         // SSE must receive approval_resolved
         let n_ev = tokio::time::timeout(Duration::from_millis(500), sse_stream.read(&mut sse_buf))
@@ -1247,13 +1338,10 @@ mod tests {
         );
         let r_deny = send_raw_http(addr, &deny_req).await;
         assert!(r_deny.starts_with("HTTP/1.1 200"));
-        assert_eq!(
-            tokio::time::timeout(Duration::from_millis(500), rx2)
-                .await
-                .unwrap()
-                .unwrap(),
-            false
-        );
+        assert!(!tokio::time::timeout(Duration::from_millis(500), rx2)
+            .await
+            .unwrap()
+            .unwrap());
 
         // 5. SSE limit returns 429 when semaphore exhausted (sse_stream already holds 1 permit)
         let held_sse = Arc::clone(&companion.sse_semaphore)
@@ -1277,6 +1365,23 @@ mod tests {
         )
         .await;
         assert!(r_revoked.starts_with("HTTP/1.1 401"));
+
+        // 7. Pairing over an HTTPS tunnel (X-Forwarded-Proto: https) sets the Secure cookie flag
+        let https_code = companion.pairing_code.read().await.clone();
+        let https_body = json!({ "code": https_code }).to_string();
+        let https_pair_req = format!(
+            "POST /api/pair HTTP/1.1\r\nHost: jarvis.tail.ts.net\r\nX-Forwarded-Proto: https\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{https_body}",
+            https_body.len()
+        );
+        let r_https_pair = send_raw_http(addr, &https_pair_req).await;
+        assert!(r_https_pair.starts_with("HTTP/1.1 200"));
+        assert!(r_https_pair.contains("; Secure"));
+
+        assert_eq!(
+            normalize_external_url("https://meu-pc.tail1234.ts.net/").unwrap(),
+            Some("https://meu-pc.tail1234.ts.net".to_string())
+        );
+        assert!(normalize_external_url("ftp://invalido").is_err());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

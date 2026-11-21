@@ -1,9 +1,32 @@
+//! # Ponto de Entrada e Comandos Tauri — `main.rs`
+//!
+//! Inicializa a janela principal do **Jarvis**, a bandeja do sistema (*System Tray*),
+//! o atalho global (`Alt+Space`), o agendador de rotinas, o servidor mobile Companion
+//! e expõe todos os comandos IPC (`#[tauri::command]`) consumidos pelo frontend em
+//! `src/bridge.ts`.
+//!
+//! ## Mapa dos Módulos Rust (`src-tauri/src/`)
+//! - [`config`]: Preferências (`config.json`) e cofre de segredos (Keyring + Windows DPAPI).
+//! - [`state`]: Estado compartilhado concorrente (`AppState`, aprovações 2FA, timers, subagentes).
+//! - [`llm`]: Streaming de chat, ciclo de ferramentas e subagentes (ChatGPT OAuth & Gemini).
+//! - [`tools`]: Catálogo de ferramentas (`ToolSpec`), política de permissões, proteção SSRF e automação Win32/DXGI.
+//! - [`knowledge`]: Base de Conhecimento Local (RAG em Rust com chunking por linha e busca BM25).
+//! - [`updater`]: Verificador e instalador 1-clique de atualizações via GitHub Releases.
+//! - [`companion`]: Servidor HTTP/SSE mobile (`companion_ui.html`) com suporte a LAN, Tailscale e Túnel HTTPS.
+//! - [`routines`]: Skills (`/comandos`) e agendador de rotinas proativas em background.
+//! - [`terminal`]: Executor de terminal interativo com streaming de `stdout`/`stderr`.
+//! - [`browser`]: Janela WebView2 acoplada e automação via Chrome DevTools Protocol (CDP).
+//! - [`mic`] / [`tts`]: Captura de microfone Win32 `waveIn` + Wake Word com VAD local e síntese ElevenLabs.
+//! - [`oauth`] / [`google_oauth`]: Fluxos OAuth 2.0 + PKCE para ChatGPT e Google Cloud.
+//! - [`storage`]: Persistência local de conversas, projetos e memórias em JSON.
+
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod browser;
 mod companion;
 mod config;
 mod google_oauth;
+mod knowledge;
 mod llm;
 mod mic;
 mod oauth;
@@ -13,6 +36,7 @@ mod storage;
 mod terminal;
 mod tools;
 mod tts;
+mod updater;
 
 use chrono::Utc;
 use config::{
@@ -161,6 +185,7 @@ async fn save_config(
         let current = state.config.read().await;
         next_config.companion_enabled = current.companion_enabled;
         next_config.companion_lan_enabled = current.companion_lan_enabled;
+        next_config.companion_external_url = current.companion_external_url.clone();
     }
     save_config_file(&state.data_dir, &next_config)?;
     let normalized = load_config(&state.data_dir);
@@ -1143,6 +1168,7 @@ async fn set_mascot_visible(app: AppHandle, visible: bool) -> Result<(), String>
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn sync_mascot_state(
     app: AppHandle,
     mode: String,
@@ -1411,6 +1437,82 @@ async fn allow_companion_firewall(
         .and_then(|r| r)
 }
 
+#[tauri::command]
+async fn set_companion_external_url(
+    state: State<'_, Arc<AppState>>,
+    companion: State<'_, Arc<companion::CompanionState>>,
+    external_url: Option<String>,
+) -> Result<companion::CompanionInfo, String> {
+    let normalized = companion::normalize_external_url(external_url.as_deref().unwrap_or(""))?;
+    {
+        let mut cfg = state.config.write().await;
+        cfg.companion_external_url = normalized.clone();
+        save_config_file(&state.data_dir, &cfg)?;
+    }
+    {
+        let mut ext_guard = companion.external_url.write().await;
+        *ext_guard = normalized;
+    }
+    Ok(companion.info().await)
+}
+
+#[tauri::command]
+async fn list_knowledge_sources(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<knowledge::KnowledgeSourceSummary>, String> {
+    Ok(knowledge::list_sources(&state.data_dir))
+}
+
+#[tauri::command]
+async fn index_knowledge_path(
+    state: State<'_, Arc<AppState>>,
+    path: String,
+    name: Option<String>,
+) -> Result<knowledge::KnowledgeSourceSummary, String> {
+    let data_dir = state.data_dir.clone();
+    tokio::task::spawn_blocking(move || knowledge::index_path(&data_dir, &path, name))
+        .await
+        .map_err(|e| format!("Falha ao indexar caminho na Base RAG: {e}"))?
+}
+
+#[tauri::command]
+async fn remove_knowledge_source(
+    state: State<'_, Arc<AppState>>,
+    id_or_path: String,
+) -> Result<bool, String> {
+    knowledge::remove_source(&state.data_dir, &id_or_path)
+}
+
+#[tauri::command]
+async fn search_knowledge_base(
+    state: State<'_, Arc<AppState>>,
+    query: String,
+    limit: Option<usize>,
+    source: Option<String>,
+) -> Result<Vec<knowledge::KnowledgeHit>, String> {
+    let data_dir = state.data_dir.clone();
+    let max_hits = limit.unwrap_or(6).clamp(1, 20);
+    tokio::task::spawn_blocking(move || {
+        knowledge::search_knowledge(&data_dir, &query, max_hits, source.as_deref())
+    })
+    .await
+    .map_err(|e| format!("Falha ao pesquisar na Base RAG: {e}"))
+}
+
+#[tauri::command]
+async fn check_app_update() -> Result<updater::UpdateCheckResult, String> {
+    updater::check_for_update().await
+}
+
+#[tauri::command]
+async fn install_app_update(
+    app: AppHandle,
+    download_url: String,
+    file_name: String,
+) -> Result<String, String> {
+    updater::download_and_launch_installer(&app, &download_url, &file_name).await
+}
+
 fn setup_tray(app: &AppHandle, state: Arc<AppState>) -> tauri::Result<()> {
     let toggle_item = MenuItem::with_id(
         app,
@@ -1451,7 +1553,7 @@ fn setup_tray(app: &AppHandle, state: Arc<AppState>) -> tauri::Result<()> {
 
     TrayIconBuilder::with_id("main-tray")
         .icon(icon)
-        .tooltip("J.A.R.V.I.S. — The Singularity Edition")
+        .tooltip("Jarvis")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| match event.id().as_ref() {
@@ -1507,11 +1609,9 @@ fn main() {
             let cfg = load_config(&data_dir);
             let companion_enabled = cfg.companion_enabled;
             let companion_lan_enabled = cfg.companion_lan_enabled;
+            let companion_external_url = cfg.companion_external_url.clone();
             let initial_shortcut = cfg.global_shortcut.clone();
-            let app_state = Arc::new(
-                AppState::new(data_dir, cfg)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?,
-            );
+            let app_state = Arc::new(AppState::new(data_dir, cfg).map_err(std::io::Error::other)?);
 
             app.manage(Arc::clone(&app_state));
             app.manage(Arc::new(mic::MicController::default()));
@@ -1523,6 +1623,9 @@ fn main() {
             companion_state
                 .lan_enabled
                 .store(companion_lan_enabled, Ordering::SeqCst);
+            if let Ok(mut ext_guard) = companion_state.external_url.try_write() {
+                *ext_guard = companion_external_url;
+            }
             app.manage(Arc::clone(&companion_state));
             routines::start_routines_scheduler(app.handle().clone(), app_state.data_dir.clone());
             companion::start_companion_server(
@@ -1663,8 +1766,15 @@ fn main() {
             get_companion_info,
             set_companion_enabled,
             set_companion_lan_enabled,
+            set_companion_external_url,
             regenerate_companion_token,
             allow_companion_firewall,
+            list_knowledge_sources,
+            index_knowledge_path,
+            remove_knowledge_source,
+            search_knowledge_base,
+            check_app_update,
+            install_app_update,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run the JARVIS desktop application");

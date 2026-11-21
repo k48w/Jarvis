@@ -1,3 +1,9 @@
+//! # Terminal Interativo em Streaming — `terminal.rs`
+//!
+//! Executa processos PowerShell assíncronos sem abrir janela de console
+//! externa (`CREATE_NO_WINDOW`), transmitindo `stdout` e `stderr` linha a linha
+//! via evento `jarvis:terminal-event` e permitindo cancelamento imediato.
+
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;

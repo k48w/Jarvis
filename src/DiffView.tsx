@@ -1,3 +1,9 @@
+/**
+ * # Painel de Alterações de Código & Git Nativo (`src/DiffView.tsx`)
+ *
+ * Exibe diffs lado a lado de arquivos criados/editados pelo Jarvis com
+ * reversão (*Undo*) em 1 clique e barra de status/commit Git do repositório ativo.
+ */
 import { useEffect, useMemo, useState } from "react";
 import {
   Check,

@@ -1,3 +1,13 @@
+/**
+ * # Cockpit Principal & Orquestrador de Estado React (`src/main.tsx`)
+ *
+ * Ponto de entrada da interface do **Jarvis**. Gerencia:
+ * - O núcleo 3D (`Stage`) e a barra de comando por voz/texto (`dock`).
+ * - A navegação entre as abas centrais (`Núcleo`, `Agentes`, `Navegador`, `Alterações`, `Terminal`, `Rotinas`).
+ * - Os listeners de eventos em tempo real vindos do Rust (`jarvis:stream-chunk`, `jarvis:tool-call`,
+ *   `jarvis:tool-approval-request`, `jarvis:agent-update`, `jarvis:wake-detected`, `jarvis:companion-sync`).
+ * - A alternância entre o aplicativo desktop (Tauri v2) e a landing page web (`LandingShowcase`).
+ */
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {

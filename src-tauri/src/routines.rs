@@ -1,3 +1,9 @@
+//! # Skills (`/comandos`) e Agendador de Rotinas Proativas — `routines.rs`
+//!
+//! Gerencia macros reutilizáveis acionadas por `/slug` no chat (`skills.json`)
+//! e o loop em background que dispara rotinas agendadas (`routines.json`) em
+//! horário diário fixo (`HH:MM`) ou por intervalo em minutos.
+
 use crate::config::atomic_write;
 use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};

@@ -1,3 +1,12 @@
+//! # Orquestrador de Modelos de IA e Subagentes — `llm.rs`
+//!
+//! Conecta o Jarvis aos provedores **OpenAI ChatGPT (OAuth 2.0 + PKCE Responses API)**
+//! e **Google Gemini (API Key ou Google OAuth)** com suporte a:
+//! - Streaming de tokens SSE em tempo real (`jarvis:stream-chunk`).
+//! - Ciclo multi-turno de chamadas de ferramentas (`tools::execute_tool_with_policy`).
+//! - Subagentes autônomos em background (`spawn_agent_task`) com deduplicação de missões.
+//! - Transcrição de voz (STT via ElevenLabs Scribe v1 ou Gemini) e síntese TTS.
+
 use crate::config::{
     get_api_key, save_config_file, AppConfig, GeminiAuthMode, KeySlot, Provider, SttEngine,
 };
@@ -204,6 +213,7 @@ async fn resolve_gemini_auth(state: &Arc<AppState>, cfg: &AppConfig) -> Result<G
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_gemini(
     app: &AppHandle,
     state: &Arc<AppState>,
@@ -384,6 +394,7 @@ async fn run_gemini(
     Ok(full_text)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_openai_responses(
     app: &AppHandle,
     state: &Arc<AppState>,
@@ -977,7 +988,7 @@ fn split_sentences(text: &str) -> Vec<String> {
     }
     let rest = cur.trim();
     if !rest.is_empty() {
-        out.push(if rest.ends_with(|c| matches!(c, '.' | '!' | '?' | ':')) {
+        out.push(if rest.ends_with(['.', '!', '?', ':']) {
             rest.to_string()
         } else {
             format!("{rest}.")
@@ -992,7 +1003,7 @@ fn shorten_sentence(sent: &str, max: usize) -> String {
     }
     let head: String = sent.chars().take(max).collect();
     let cut = head
-        .rfind(|c| matches!(c, ',' | ';' | '—' | '–'))
+        .rfind([',', ';', '—', '–'])
         .filter(|&p| p > max / 2)
         .unwrap_or_else(|| head.rfind(' ').unwrap_or(head.len()));
     let mut s = head[..cut]

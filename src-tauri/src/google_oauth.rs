@@ -1,3 +1,9 @@
+//! # Autenticação Google OAuth 2.0 + PKCE — `google_oauth.rs`
+//!
+//! Implementa o fluxo OAuth 2.0 com callback local para contas Google Cloud /
+//! Gemini, com renovação automática de `access_token` e armazenamento seguro
+//! via Keyring do Windows ou fallback criptografado com DPAPI (`DPAPI1:`).
+
 use crate::config::{get_api_key, KeySlot};
 use crate::oauth::{
     decode_jwt_claims, html_page, parse_callback_query, pkce_s256_challenge, random_base64url,

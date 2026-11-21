@@ -1,3 +1,10 @@
+/**
+ * # Ponte IPC Frontend ↔ Backend Rust (`src/bridge.ts`)
+ *
+ * Centraliza todas as chamadas `invoke(...)` e assinaturas de eventos `listen(...)`
+ * do Tauri v2, fornecendo também um modo de simulação seguro quando a interface
+ * é aberta no navegador web (prévia em `https://jarvis-cinematic.vercel.app`).
+ */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
@@ -1616,15 +1623,21 @@ export interface CompanionInfo {
   pairUrl: string;
   pairingCode: string;
   connectedClients: number;
+  tailscaleIp: string | null;
+  tailscalePairUrl: string | null;
+  externalUrl: string | null;
+  externalPairUrl: string | null;
 }
 
 let simCompanionEnabled = false;
 let simCompanionLan = false;
 let simCompanionCode = "DEMO4821";
+let simCompanionExternalUrl: string | null = null;
 
 export async function getCompanionInfo(): Promise<CompanionInfo> {
   if (isTauri) return invoke<CompanionInfo>("get_companion_info");
   const ip = simCompanionEnabled && simCompanionLan ? "192.168.1.100" : "127.0.0.1";
+  const tsIp = simCompanionEnabled && simCompanionLan ? "100.94.22.15" : null;
   return {
     enabled: simCompanionEnabled,
     lanEnabled: simCompanionLan,
@@ -1634,6 +1647,12 @@ export async function getCompanionInfo(): Promise<CompanionInfo> {
     pairUrl: `http://${ip}:47821/?pair=${simCompanionCode}`,
     pairingCode: simCompanionCode,
     connectedClients: 0,
+    tailscaleIp: tsIp,
+    tailscalePairUrl: tsIp ? `http://${tsIp}:47821/?pair=${simCompanionCode}` : null,
+    externalUrl: simCompanionExternalUrl,
+    externalPairUrl: simCompanionExternalUrl
+      ? `${simCompanionExternalUrl}/?pair=${simCompanionCode}`
+      : null,
   };
 }
 
@@ -1646,6 +1665,16 @@ export async function setCompanionEnabled(enabled: boolean): Promise<CompanionIn
 export async function setCompanionLanEnabled(lanEnabled: boolean): Promise<CompanionInfo> {
   if (isTauri) return invoke<CompanionInfo>("set_companion_lan_enabled", { lanEnabled });
   simCompanionLan = lanEnabled;
+  return getCompanionInfo();
+}
+
+export async function setCompanionExternalUrl(
+  externalUrl: string | null,
+): Promise<CompanionInfo> {
+  if (isTauri) {
+    return invoke<CompanionInfo>("set_companion_external_url", { externalUrl });
+  }
+  simCompanionExternalUrl = externalUrl?.trim().replace(/\/+$/, "") || null;
   return getCompanionInfo();
 }
 
@@ -1678,6 +1707,173 @@ export function onApprovalResolved(
     return listen<{ approvalId: string; approved: boolean }>(
       "jarvis:approval-resolved",
       (e) => handler(e.payload),
+    );
+  }
+  return Promise.resolve(() => {});
+}
+
+// ─── Base de Conhecimento Local (RAG) ─────────────────────────────────────────
+
+export interface KnowledgeSourceSummary {
+  id: string;
+  name: string;
+  path: string;
+  fileCount: number;
+  chunkCount: number;
+  indexedAt: string;
+}
+
+export interface KnowledgeHit {
+  chunkId: string;
+  sourceId: string;
+  sourceName: string;
+  filePath: string;
+  relativePath: string;
+  startLine: number;
+  endLine: number;
+  score: number;
+  snippet: string;
+}
+
+let simKnowledgeSources: KnowledgeSourceSummary[] = [
+  {
+    id: "kb-sim-jarvis",
+    name: "Jarvis-Cinematic",
+    path: "C:\\Users\\dev\\Jarvis-Cinematic",
+    fileCount: 28,
+    chunkCount: 194,
+    indexedAt: new Date().toISOString(),
+  },
+];
+
+export async function listKnowledgeSources(): Promise<KnowledgeSourceSummary[]> {
+  if (isTauri) return invoke<KnowledgeSourceSummary[]>("list_knowledge_sources");
+  return simKnowledgeSources;
+}
+
+export async function indexKnowledgePath(
+  path: string,
+  name?: string,
+): Promise<KnowledgeSourceSummary> {
+  if (isTauri) {
+    return invoke<KnowledgeSourceSummary>("index_knowledge_path", {
+      path,
+      name: name ?? null,
+    });
+  }
+  const clean = path.trim();
+  const parts = clean.split(/[\\/]/).filter(Boolean);
+  const item: KnowledgeSourceSummary = {
+    id: `kb-sim-${Date.now()}`,
+    name: name?.trim() || parts.at(-1) || "Documento",
+    path: clean,
+    fileCount: 12,
+    chunkCount: 64,
+    indexedAt: new Date().toISOString(),
+  };
+  simKnowledgeSources = [
+    item,
+    ...simKnowledgeSources.filter((s) => s.path !== clean),
+  ];
+  return item;
+}
+
+export async function removeKnowledgeSource(idOrPath: string): Promise<boolean> {
+  if (isTauri) {
+    return invoke<boolean>("remove_knowledge_source", { idOrPath });
+  }
+  simKnowledgeSources = simKnowledgeSources.filter(
+    (s) => s.id !== idOrPath && s.path !== idOrPath,
+  );
+  return true;
+}
+
+export async function searchKnowledgeBase(
+  query: string,
+  limit = 6,
+  source?: string,
+): Promise<KnowledgeHit[]> {
+  if (isTauri) {
+    return invoke<KnowledgeHit[]>("search_knowledge_base", {
+      query,
+      limit,
+      source: source ?? null,
+    });
+  }
+  if (!query.trim()) return [];
+  return [
+    {
+      chunkId: "kb-sim-1",
+      sourceId: "kb-sim-jarvis",
+      sourceName: "Jarvis-Cinematic",
+      filePath: "C:\\Users\\dev\\Jarvis-Cinematic\\src-tauri\\src\\knowledge.rs",
+      relativePath: "src-tauri/src/knowledge.rs",
+      startLine: 1,
+      endLine: 36,
+      score: 6.42,
+      snippet: `// Trecho simulado para "${query.trim()}"\npub fn search_knowledge(data_dir: &Path, query: &str, limit: usize) -> Vec<KnowledgeHit>`,
+    },
+  ];
+}
+
+// ─── Auto-Updater Nativo (GitHub Releases) ────────────────────────────────────
+
+export interface UpdateCheckResult {
+  currentVersion: string;
+  latestVersion: string;
+  updateAvailable: boolean;
+  releaseTitle: string;
+  releaseNotes: string;
+  publishedAt: string;
+  htmlUrl: string;
+  installerName: string | null;
+  installerUrl: string | null;
+  installerSize: number;
+  installerUpdatedAt: string | null;
+}
+
+export interface UpdateProgressEvent {
+  stage: "downloading" | "launching" | string;
+  downloadedBytes: number;
+  totalBytes: number;
+  percent: number;
+}
+
+export async function checkAppUpdate(): Promise<UpdateCheckResult> {
+  if (isTauri) return invoke<UpdateCheckResult>("check_app_update");
+  return {
+    currentVersion: "8.0.0",
+    latestVersion: "8.0.0",
+    updateAvailable: false,
+    releaseTitle: "Jarvis para Windows",
+    releaseNotes: "Build verificada no GitHub Releases.",
+    publishedAt: new Date().toISOString(),
+    htmlUrl: "https://github.com/k48w/Jarvis/releases/latest",
+    installerName: "JARVIS_8.0.0_x64-setup.exe",
+    installerUrl:
+      "https://github.com/k48w/Jarvis/releases/download/v8.0.0/JARVIS_8.0.0_x64-setup.exe",
+    installerSize: 8234862,
+    installerUpdatedAt: new Date().toISOString(),
+  };
+}
+
+export async function installAppUpdate(
+  downloadUrl: string,
+  fileName: string,
+): Promise<string> {
+  if (isTauri) {
+    return invoke<string>("install_app_update", { downloadUrl, fileName });
+  }
+  window.open(downloadUrl, "_blank", "noopener,noreferrer");
+  return "Download do instalador iniciado no navegador.";
+}
+
+export function onUpdateProgress(
+  handler: (ev: UpdateProgressEvent) => void,
+): Promise<UnlistenFn> {
+  if (isTauri) {
+    return listen<UpdateProgressEvent>("jarvis:update-progress", (e) =>
+      handler(e.payload),
     );
   }
   return Promise.resolve(() => {});

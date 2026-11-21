@@ -95,3 +95,11 @@ flowchart TD
 - **Proteção contra Slowloris / Flood**: timeouts de leitura (`5s` header, `10s` corpo) e semáforos (`32` conexões HTTP e `6` streams SSE simultâneos, retornando `429` acima do limite).
 - **Segredos locais**: chaves de API e tokens OAuth usam o Gerenciador de Credenciais do Windows (`keyring`) e recorrem apenas a arquivos cifrados com **Windows DPAPI** (`DPAPI1:...`) se o keyring falhar (falha segura em plataformas sem keyring/DPAPI).
 - **SSRF Guard**: URLs abertas ou baixadas por ferramentas (`fetch_webpage`, `fetch_browser_page`, `open_url`) passam por validação de IP privado/loopback/link-local/CGNAT após resolução DNS e em cada redirecionamento HTTP.
+- **Tailscale VPN & Túnel HTTPS**: além do IP de Wi-Fi local, o Companion detecta automaticamente interfaces Tailscale (`100.64.0.0/10`) para conexão via 4G/5G e permite configurar uma URL de túnel HTTPS (adicionando automaticamente a flag `Secure` ao cookie `jarvis_session` quando acessado via `https://`).
+
+---
+
+## 5. Base de Conhecimento Local (RAG — `knowledge.rs`) e Auto-Updater (`updater.rs`)
+
+- **Indexação e Busca BM25 (`knowledge.rs`)**: divide arquivos de código e documentação em blocos de 36 linhas (sobreposição de 6 linhas) com rastreamento de `start_line..=end_line`, filtrando `.env` e chaves privadas. A busca combina pontuação BM25 com correspondência exata de frase e nome de arquivo, persistindo em `knowledge_base.json`.
+- **Auto-Updater GitHub Releases (`updater.rs`)**: consulta a API oficial do GitHub Releases, compara versões SemVer, valida estritamente o host HTTPS (`github.com/k48w/Jarvis/releases/download/...` / `objects.githubusercontent.com`), verifica o cabeçalho binário PE (`MZ`) antes de executar o instalador NSIS e emite progresso via `jarvis:update-progress`.

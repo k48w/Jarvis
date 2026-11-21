@@ -682,9 +682,17 @@
       return;
     }
     activeApprovalId = req.approvalId || req.id;
-    approvalTitle.textContent = "Aprovar ação no PC: " + (req.title || req.toolName || req.name || "");
-    approvalSummary.textContent = req.argsSummary || req.summary || req.description || "";
+    const titleText = "Aprovar ação no PC: " + (req.title || req.toolName || req.name || "");
+    const summaryText = req.argsSummary || req.summary || req.description || "";
+    approvalTitle.textContent = titleText;
+    approvalSummary.textContent = summaryText;
     approvalCard.classList.add("show");
+    try { if (navigator.vibrate) navigator.vibrate([160, 70, 200]); } catch {}
+    try {
+      if ("Notification" in window && Notification.permission === "granted" && document.hidden) {
+        new Notification(titleText, { body: summaryText });
+      }
+    } catch {}
   }
 
   document.getElementById("btn-approve").onclick = async () => {

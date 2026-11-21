@@ -1,3 +1,9 @@
+//! # Autenticação ChatGPT (OAuth 2.0 + PKCE) — `oauth.rs`
+//!
+//! Implementa o login oficial OAuth 2.0 + PKCE para contas ChatGPT Plus/Pro,
+//! descoberta dinâmica de modelos suportados e persistência segura de tokens
+//! no Windows Credential Manager (`keyring`) ou cifrada com Windows DPAPI.
+
 use crate::config::{atomic_write, mask_key};
 use base64::Engine as _;
 use chrono::Utc;

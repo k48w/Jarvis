@@ -1,3 +1,10 @@
+//! # Microfone Nativo Win32 (`waveIn`) & Wake Word — `mic.rs`
+//!
+//! Captura áudio PCM 16 kHz mono diretamente via API Win32 `waveIn` em Rust,
+//! calcula nível RMS em tempo real, executa detecção local de atividade de voz
+//! (VAD — zero tráfego durante o silêncio) e reconhece variações fonéticas de
+//! `"Ei, Jarvis"` em português.
+
 use crate::llm;
 use crate::state::AppState;
 use base64::Engine as _;

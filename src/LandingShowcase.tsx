@@ -1,3 +1,10 @@
+/**
+ * # Página Oficial & Vitrine Web (`src/LandingShowcase.tsx`)
+ *
+ * Renderizada quando o projeto é aberto no navegador (`https://jarvis-cinematic.vercel.app`),
+ * apresentando as funcionalidades nativas em Rust/Win32, link direto para o instalador `.exe`
+ * no GitHub Releases e botão para abrir a prévia interativa do cockpit.
+ */
 import { useEffect, useRef, useState } from "react";
 import {
   Aperture,
@@ -1039,18 +1046,25 @@ export function LandingShowcase({
                 <td>Sem automação recorrente no desktop</td>
               </tr>
               <tr>
-                <td>Celular ↔ PC (QR Code)</td>
+                <td>Base de Conhecimento (RAG)</td>
                 <td className="highlight">
-                  <strong>PWA pareado com código único + cookie HttpOnly (8h)</strong>: voz remota, Deck de Skills, tela do PC e aprovação 2FA
+                  <strong>Indexador local BM25 em Rust</strong> para pastas de código e documentos com linha exata
+                </td>
+                <td>Limitado a colar trechos manualmente no chat</td>
+              </tr>
+              <tr>
+                <td>Celular ↔ PC (Wi-Fi &amp; 4G/5G)</td>
+                <td className="highlight">
+                  <strong>LAN, Tailscale VPN e Túnel HTTPS</strong> com código único + cookie HttpOnly (8h) e 2FA
                 </td>
                 <td>Sem controle nativo do PC pelo celular</td>
               </tr>
               <tr>
-                <td>Segurança &amp; Credenciais</td>
+                <td>Segurança &amp; Auto-Updater</td>
                 <td className="highlight">
-                  <strong>DPAPI no Windows + proteção SSRF</strong> e Companion desligado por padrão
+                  <strong>DPAPI no Windows + proteção SSRF + atualização 1-clique</strong> via GitHub Releases
                 </td>
-                <td>Credenciais em texto puro ou sem proteção LAN</td>
+                <td>Credenciais em texto puro ou atualização manual</td>
               </tr>
               <tr>
                 <td>Navegador Integrado</td>

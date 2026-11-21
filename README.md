@@ -6,7 +6,7 @@
 
 Assistente desktop nativo para Windows feito em Tauri 2, Rust e React.
 
-[Baixar para Windows](https://github.com/k48w/Jarvis/releases/tag/v8.0.0) · [Prévia Web](https://jarvis-cinematic.vercel.app/) · [Arquitetura](docs/ARCHITECTURE.md)
+[Baixar para Windows](https://github.com/k48w/Jarvis/releases/tag/v8.0.0) · [Prévia Web](https://jarvis-cinematic.vercel.app/) · [Arquitetura](docs/ARCHITECTURE.md) · [Guia do Código](CONTRIBUTING.md)
 
 <img src="docs/assistant-desktop.png" width="100%" alt="Interface principal do Jarvis no Windows" />
 
@@ -20,7 +20,9 @@ Assistente desktop nativo para Windows feito em Tauri 2, Rust e React.
 - **Visão de janelas e jogos** — lista processos abertos e captura janelas específicas com `PrintWindow` e `DXGI` (inclusive em segundo plano), além de ler prints e texto direto do `Ctrl+C`.
 - **Terminal ao vivo e Git nativo** — aba de terminal PowerShell com saída em streaming e cancelamento em tempo real, ferramentas `git_status`, `git_diff`, `git_log` e `git_commit`, além de diff colorido com desfazer em 1 clique.
 - **Skills (`/comando`) e rotinas agendadas** — macros reutilizáveis como `/briefing`, `/saude-pc`, `/foco` e `/git-review`, mais um agendador em segundo plano para tarefas diárias ou por intervalo.
-- **Celular conectado ao PC (Jarvis Companion)** — servidor local em Rust desativado por padrão e limitado a `127.0.0.1` até ativação explícita do modo LAN em **Ajustes → Celular**. O pareamento usa código descartável de uso único trocado por sessão em cookie `HttpOnly` (`SameSite=Strict`), sem token em URLs ou EventSource, com revogação instantânea de sessões.
+- **Base de Conhecimento Local (RAG em Rust)** — indexa pastas de projetos, códigos e documentações locais em blocos com numeração exata de linhas e busca híbrida BM25 (`kb_index_path`, `kb_search`, `kb_list`, `kb_remove` + aba **Base RAG** no painel de conversas), ignorando automaticamente `.env` e arquivos de segredos.
+- **Auto-Updater nativo via GitHub Releases** — verifica novas versões direto em **Ajustes → Sistema**, valida a origem HTTPS e o cabeçalho executável (`MZ`) e baixa/inicia o instalador `.exe` atualizado em 1 clique com barra de progresso.
+- **Celular conectado ao PC dentro e fora do Wi-Fi (Jarvis Companion)** — servidor local em Rust desativado por padrão e limitado a `127.0.0.1` até ativação explícita em **Ajustes → Celular**. Suporta **Wi-Fi Local (LAN)**, detecção automática de **Tailscale VPN (`100.x.y.z`)** para uso no 4G/5G fora de casa e **Túnel HTTPS** (Tailscale Serve/Funnel ou Cloudflare Tunnel). O pareamento usa código descartável de uso único trocado por sessão em cookie `HttpOnly` (`SameSite=Strict`, com flag `Secure` automática em HTTPS) e alertas no celular para aprovações 2FA.
 - **Proteção de segredos e rede** — chaves e sessões OAuth priorizam o Gerenciador de Credenciais do Windows e usam criptografia DPAPI caso o keyring falhe (nunca texto puro); ferramentas web validam e bloqueiam IPs locais/privados e redirecionamentos SSRF.
 - **Agentes em paralelo** — até 3 tarefas rodando em segundo plano ao mesmo tempo; quando um agente termina, o próprio Jarvis fala e salva um resumo curto na conversa.
 - **Navegador embutido opcional** — WebView2 lado a lado com o chat quando você pede para abrir ou interagir com um site; buscas comuns acontecem silenciosamente em segundo plano.
@@ -82,4 +84,4 @@ npm run tauri -- build
 
 > Nota: em builds anteriores sem suporte a rede local segura ou quando o Companion está desativado, o endpoint local responde `503 Service Unavailable`. Ao ativar o modo LAN, o tráfego usa HTTP na rede Wi-Fi local (sem TLS); ative apenas em redes privadas confiáveis.
 
-Documentação técnica adicional: [Arquitetura](docs/ARCHITECTURE.md) · [Áudio](docs/audio.md) · [Integrações nativas](docs/native.md) · [Segurança](SECURITY.md)
+Documentação técnica adicional: [Guia do Código (CONTRIBUTING)](CONTRIBUTING.md) · [Arquitetura](docs/ARCHITECTURE.md) · [Áudio](docs/audio.md) · [Integrações nativas](docs/native.md) · [Segurança](SECURITY.md)

@@ -2,7 +2,7 @@
 name = "jarvis"
 version = "8.0.0"
 edition = "2021"
-description = "J.A.R.V.I.S. — The Singularity Edition"
+description = "Jarvis — Assistente desktop em Rust e Tauri 2 para Windows"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

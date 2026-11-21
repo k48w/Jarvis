@@ -1,3 +1,11 @@
+//! # Configuração e Cofre de Credenciais — `config.rs`
+//!
+//! Gerencia as preferências persistidas do usuário (`config.json`) e o
+//! armazenamento seguro de chaves de API (Gemini, Google OAuth, ElevenLabs)
+//! via **Windows Credential Manager (`keyring`)** com fallback criptografado
+//! por usuário via **Windows DPAPI (`CryptProtectData` / `DPAPI1:`)** —
+//! garantindo que nenhum segredo seja gravado em texto puro em disco.
+
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -111,6 +119,7 @@ pub struct AppConfig {
     pub web_search_enabled: bool,
     pub companion_enabled: bool,
     pub companion_lan_enabled: bool,
+    pub companion_external_url: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -139,6 +148,7 @@ impl Default for AppConfig {
             web_search_enabled: true,
             companion_enabled: false,
             companion_lan_enabled: false,
+            companion_external_url: None,
         }
     }
 }
@@ -219,7 +229,7 @@ pub(crate) fn protect_bytes_dpapi(plain: &[u8]) -> Result<Vec<u8>, String> {
         CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
 
-    let mut in_blob = CRYPT_INTEGER_BLOB {
+    let in_blob = CRYPT_INTEGER_BLOB {
         cbData: u32::try_from(plain.len())
             .map_err(|_| "Segredo excede tamanho DPAPI".to_string())?,
         pbData: plain.as_ptr() as *mut u8,
@@ -227,7 +237,7 @@ pub(crate) fn protect_bytes_dpapi(plain: &[u8]) -> Result<Vec<u8>, String> {
     let mut out_blob = CRYPT_INTEGER_BLOB::default();
     unsafe {
         CryptProtectData(
-            &mut in_blob,
+            &in_blob,
             None,
             None,
             None,
@@ -255,14 +265,14 @@ pub(crate) fn unprotect_bytes_dpapi(cipher: &[u8]) -> Result<Vec<u8>, String> {
         CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
 
-    let mut in_blob = CRYPT_INTEGER_BLOB {
+    let in_blob = CRYPT_INTEGER_BLOB {
         cbData: u32::try_from(cipher.len()).map_err(|_| "Cipher DPAPI inválido".to_string())?,
         pbData: cipher.as_ptr() as *mut u8,
     };
     let mut out_blob = CRYPT_INTEGER_BLOB::default();
     unsafe {
         CryptUnprotectData(
-            &mut in_blob,
+            &in_blob,
             None,
             None,
             None,

@@ -1,3 +1,9 @@
+/**
+ * # Painel do Navegador Integrado WebView2 (`src/BrowserView.tsx`)
+ *
+ * Controla a janela WebView2 acoplada lado a lado com o chat, sincronizando
+ * coordenadas (`browserSyncBounds`), inspeção DOM ao vivo e comandos assistidos.
+ */
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,

@@ -1,3 +1,9 @@
+/**
+ * # Painel de Skills (`/comandos`) & Rotinas Agendadas (`src/RoutinesView.tsx`)
+ *
+ * Permite criar e disparar macros rápidas (`/briefing`, `/saude-pc`, `/foco`, etc.)
+ * e configurar rotinas recorrentes (diárias em `HH:MM` ou por intervalo em minutos).
+ */
 import { useState } from "react";
 import {
   Clock,

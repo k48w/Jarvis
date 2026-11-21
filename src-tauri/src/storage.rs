@@ -1,3 +1,9 @@
+//! # Persistência de Conversas, Projetos e Memórias — `storage.rs`
+//!
+//! Armazena e indexa o histórico de conversas (`conversations.json`), pastas
+//! de projetos vinculados (`projects.json`) e memórias de longo prazo do
+//! usuário (`memories.json`) com gravação atômica em disco.
+
 use crate::config::atomic_write;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};

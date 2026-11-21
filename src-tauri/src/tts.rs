@@ -1,3 +1,9 @@
+//! # Síntese de Voz (ElevenLabs TTS & Cache Local) — `tts.rs`
+//!
+//! Limpa marcações Markdown/URLs para leitura natural, consulta vozes da
+//! ElevenLabs e mantém um cache local indexado por hash SHA-256 para evitar
+//! consumo repetido de créditos em frases idênticas.
+
 use crate::config::{DEFAULT_ELEVENLABS_MODEL_ID, DEFAULT_ELEVENLABS_VOICE_ID};
 use base64::Engine as _;
 use regex::Regex;

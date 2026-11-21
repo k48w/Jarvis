@@ -1,3 +1,9 @@
+/**
+ * # Painel do Terminal ao Vivo (`src/TerminalView.tsx`)
+ *
+ * Exibe sessões PowerShell executadas pelo usuário ou pela ferramenta `run_terminal`
+ * com streaming em tempo real de `stdout`/`stderr` e botão de cancelamento.
+ */
 import { useEffect, useRef, useState } from "react";
 import { Play, Square, Terminal, Trash2 } from "lucide-react";
 

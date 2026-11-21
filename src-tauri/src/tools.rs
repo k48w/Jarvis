@@ -1,5 +1,20 @@
+//! # Catálogo e Executor de Ferramentas — `tools.rs`
+//!
+//! Define todas as ferramentas disponíveis para os modelos ChatGPT e Gemini
+//! (`tool_catalog`), a política de permissões (`Auto`, `Review`, `Safe`) com
+//! aprovação 2FA (`wait_for_user_approval`), a proteção contra SSRF
+//! (`validate_public_http_url`) e as implementações nativas em Rust/Win32
+//! (captura de tela DXGI/PrintWindow, automação `SendInput`, áudio CoreAudio,
+//! arquivos com snapshot para undo, Git, Terminal, Rotinas e Base RAG).
+//!
+//! ## Como adicionar uma nova ferramenta
+//! 1. Declare um item `ToolSpec` em [`tool_catalog`] com nome, risco (`ToolRisk`) e schema JSON.
+//! 2. Adicione o resumo curto de argumentos em `summarize_tool_args`.
+//! 3. Implemente o braço correspondente no `match name` dentro de `execute_tool`.
+
 use crate::browser;
 use crate::config::PermissionMode;
+use crate::knowledge;
 use crate::state::{ActiveTimer, AppState, TimerHandle};
 use crate::storage;
 use chrono::{Duration as ChronoDuration, Local};
@@ -640,6 +655,55 @@ pub fn tool_catalog() -> Vec<ToolSpec> {
                 "required": ["id"]
             }),
         },
+        ToolSpec {
+            name: "kb_index_path",
+            title: "Indexar na Base de Conhecimento (RAG)",
+            description: "Indexa uma pasta de projeto, documentação ou arquivo local na Base de Conhecimento (RAG) em blocos com numeração de linhas para buscas semânticas rápidas.",
+            risk: ToolRisk::Read,
+            parameters: || json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Caminho absoluto da pasta ou arquivo local para indexar." },
+                    "name": { "type": "string", "description": "Nome amigável opcional para identificar esta fonte." }
+                },
+                "required": ["path"]
+            }),
+        },
+        ToolSpec {
+            name: "kb_search",
+            title: "Pesquisar na Base de Conhecimento (RAG)",
+            description: "Busca os trechos mais relevantes (BM25 + frase/identificador) nos documentos e códigos indexados na Base de Conhecimento local, retornando arquivo e linhas exatas.",
+            risk: ToolRisk::Read,
+            parameters: || json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Termos, pergunta técnica, nome de função ou erro a pesquisar." },
+                    "limit": { "type": "integer", "description": "Quantidade máxima de trechos (padrão 5, máx 15)." },
+                    "source": { "type": "string", "description": "Filtro opcional por nome, caminho ou ID da fonte." }
+                },
+                "required": ["query"]
+            }),
+        },
+        ToolSpec {
+            name: "kb_list",
+            title: "Listar Fontes da Base de Conhecimento",
+            description: "Lista todas as pastas e arquivos indexados na Base de Conhecimento local (RAG) com contagem de arquivos e blocos.",
+            risk: ToolRisk::Read,
+            parameters: || json!({ "type": "object", "properties": {} }),
+        },
+        ToolSpec {
+            name: "kb_remove",
+            title: "Remover Fonte da Base de Conhecimento",
+            description: "Remove uma pasta ou arquivo indexado da Base de Conhecimento local pelo ID ou caminho.",
+            risk: ToolRisk::Read,
+            parameters: || json!({
+                "type": "object",
+                "properties": {
+                    "id_or_path": { "type": "string", "description": "ID da fonte (ex: kb-...) ou caminho indexado." }
+                },
+                "required": ["id_or_path"]
+            }),
+        },
     ]
 }
 
@@ -812,6 +876,9 @@ pub fn format_args_summary(name: &str, args: &Value) -> String {
             .chars()
             .take(54)
             .collect(),
+        "kb_index_path" => args["path"].as_str().unwrap_or("").to_string(),
+        "kb_search" => args["query"].as_str().unwrap_or("").to_string(),
+        "kb_remove" => args["id_or_path"].as_str().unwrap_or("").to_string(),
         _ => String::new(),
     }
 }
@@ -1094,7 +1161,7 @@ fn read_system_status_blocking() -> String {
     }
 
     let mut procs: Vec<_> = sys.processes().values().collect();
-    procs.sort_by(|a, b| b.memory().cmp(&a.memory()));
+    procs.sort_by_key(|a| std::cmp::Reverse(a.memory()));
     let top_procs: Vec<String> = procs
         .into_iter()
         .take(5)
@@ -2234,6 +2301,98 @@ pub async fn execute_tool_with_policy(
                 }
             })
         }
+        "kb_index_path" => {
+            let raw_path = args["path"].as_str().unwrap_or("");
+            let custom_name = args["name"].as_str().map(|s| s.to_string());
+            let data_dir = state.data_dir.clone();
+            let path_owned = raw_path.to_string();
+            tokio::task::spawn_blocking(move || {
+                knowledge::index_path(&data_dir, &path_owned, custom_name)
+            })
+            .await
+            .map_err(|e| format!("Falha na tarefa de indexação RAG: {e}"))
+            .and_then(|res| {
+                res.map(|sum| {
+                    format!(
+                        "Fonte '{}' indexada na Base de Conhecimento (id: {}, {} arquivo(s), {} blocos/chunks).",
+                        sum.name, sum.id, sum.file_count, sum.chunk_count
+                    )
+                })
+            })
+        }
+        "kb_search" => {
+            let query = args["query"].as_str().unwrap_or("");
+            let limit = args["limit"].as_u64().unwrap_or(5).clamp(1, 15) as usize;
+            let source_filter = args["source"].as_str().map(|s| s.to_string());
+            let data_dir = state.data_dir.clone();
+            let query_owned = query.to_string();
+            tokio::task::spawn_blocking(move || {
+                knowledge::search_knowledge(
+                    &data_dir,
+                    &query_owned,
+                    limit,
+                    source_filter.as_deref(),
+                )
+            })
+            .await
+            .map_err(|e| format!("Falha na busca RAG: {e}"))
+            .map(|hits| {
+                if hits.is_empty() {
+                    format!(
+                        "Nenhum trecho relevante encontrado na Base de Conhecimento para '{query}'."
+                    )
+                } else {
+                    let mut out = format!(
+                        "Encontrados {} trecho(s) relevantes na Base de Conhecimento para '{}':\n\n",
+                        hits.len(),
+                        query
+                    );
+                    for (i, hit) in hits.iter().enumerate() {
+                        out.push_str(&format!(
+                            "--- [{}] Fonte: {} | Arquivo: {} (linhas {}-{}) | Score: {:.2} ---\n{}\n\n",
+                            i + 1,
+                            hit.source_name,
+                            hit.relative_path,
+                            hit.start_line,
+                            hit.end_line,
+                            hit.score,
+                            hit.snippet
+                        ));
+                    }
+                    out
+                }
+            })
+        }
+        "kb_list" => {
+            let sources = knowledge::list_sources(&state.data_dir);
+            if sources.is_empty() {
+                Ok(
+                    "Nenhuma pasta ou arquivo indexado na Base de Conhecimento no momento."
+                        .to_string(),
+                )
+            } else {
+                let lines: Vec<String> = sources
+                    .into_iter()
+                    .map(|s| {
+                        format!(
+                            "- {} (id: {}): {} arquivo(s), {} chunks | caminho: {}",
+                            s.name, s.id, s.file_count, s.chunk_count, s.path
+                        )
+                    })
+                    .collect();
+                Ok(lines.join("\n"))
+            }
+        }
+        "kb_remove" => {
+            let target = args["id_or_path"].as_str().unwrap_or("");
+            knowledge::remove_source(&state.data_dir, target).map(|removed| {
+                if removed {
+                    format!("Fonte '{target}' removida da Base de Conhecimento.")
+                } else {
+                    format!("Fonte '{target}' não encontrada na Base de Conhecimento.")
+                }
+            })
+        }
         _ => Err(format!("Ferramenta não implementada: {name}")),
     };
 
@@ -2294,7 +2453,7 @@ fn encode_bgra_to_jpeg_base64(
     for y in 0..h {
         let row_start = y * row_pitch;
         let row = &bgra[row_start..row_start + w * 4];
-        for px in row.chunks_exact(4) {
+        for px in row.as_chunks::<4>().0 {
             rgb.push(px[2]); // R
             rgb.push(px[1]); // G
             rgb.push(px[0]); // B
@@ -3085,10 +3244,12 @@ fn capture_window_printwindow(hwnd_raw: isize) -> Result<(u32, u32, u32, u32, St
     }
 }
 
+pub(crate) type WindowCapturePayload = ((u32, u32, u32, u32, String), String, &'static str);
+
 pub(crate) fn capture_target_window_blocking(
     query: &str,
     open_wins: &[OpenWindowInfo],
-) -> Result<((u32, u32, u32, u32, String), String, &'static str), String> {
+) -> Result<WindowCapturePayload, String> {
     let Some(win) = match_target_window(query, open_wins) else {
         let available: Vec<String> = open_wins
             .iter()
@@ -3596,8 +3757,8 @@ fn tool_read_file(
         "Arquivo: {} (linhas {start}-{end} de {total})\n",
         path.display()
     );
-    for idx in (start - 1)..end {
-        out.push_str(&format!("{}: {}\n", idx + 1, lines[idx]));
+    for (idx, line) in lines.iter().enumerate().take(end).skip(start - 1) {
+        out.push_str(&format!("{}: {}\n", idx + 1, line));
         if out.len() > 24_000 {
             out.push_str("\n... (conteúdo truncado; use start_line/end_line para continuar)");
             break;
@@ -3888,7 +4049,7 @@ fn dib_bytes_to_bgra(dib: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     };
     let palette_bytes = clr_used * 4;
     let pixel_offset = header_size + extra_masks + palette_bytes;
-    let src_stride = (((width as usize) * (bpp as usize) + 31) / 32) * 4;
+    let src_stride = ((width as usize) * (bpp as usize)).div_ceil(32) * 4;
     let needed = pixel_offset + src_stride * (height as usize);
     if dib.len() < needed {
         return Err("Dados de pixel incompletos na imagem da área de transferência.".to_string());
@@ -4360,7 +4521,7 @@ mod tests {
             let w = 1920u32;
             let h = 1080u32;
             let mut bgra = vec![0u8; (w * h * 4) as usize];
-            for (i, px) in bgra.chunks_exact_mut(4).enumerate() {
+            for (i, px) in bgra.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 px[0] = (i % 255) as u8;
                 px[1] = 180;
                 px[2] = 40;
