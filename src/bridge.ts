@@ -1320,3 +1320,61 @@ export function onTrayAction(handler: (ev: TrayActionEvent) => void): Promise<Un
   if (isTauri) return listen<TrayActionEvent>("jarvis:tray-action", (e) => handler(e.payload));
   return subscribeBrowser("jarvis:tray-action", handler);
 }
+
+export interface GitChangeItem {
+  status: string;
+  path: string;
+}
+
+export interface GitRepoStatus {
+  isGitRepo: boolean;
+  path: string;
+  branch: string;
+  ahead: number;
+  behind: number;
+  changes: GitChangeItem[];
+}
+
+export async function getGitRepoStatus(path: string): Promise<GitRepoStatus> {
+  if (isTauri) {
+    return invoke<GitRepoStatus>("get_git_repo_status", { path });
+  }
+  return {
+    isGitRepo: true,
+    path: path || "C:\\Workspace\\Jarvis",
+    branch: "main",
+    ahead: 0,
+    behind: 0,
+    changes: [],
+  };
+}
+
+export async function gitCommitWorkspace(
+  path: string,
+  message: string,
+): Promise<string> {
+  if (isTauri) {
+    return invoke<string>("git_commit_workspace", { path, message });
+  }
+  return `Commit simulado em main: ${message}`;
+}
+
+export async function appendAssistantNote(
+  conversationId: string,
+  text: string,
+): Promise<StoredMessage> {
+  if (isTauri) {
+    return invoke<StoredMessage>("append_assistant_note", {
+      conversationId,
+      text,
+    });
+  }
+  return {
+    id: `note-${Date.now()}`,
+    role: "assistant",
+    text,
+    timestamp: new Date().toISOString(),
+    mode: "responding",
+    tool_events: [],
+  };
+}

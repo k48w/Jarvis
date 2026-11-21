@@ -1180,6 +1180,40 @@ async fn mascot_action(app: AppHandle, action: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+async fn get_git_repo_status(path: String) -> Result<tools::GitRepoStatus, String> {
+    tokio::task::spawn_blocking(move || tools::git_repo_status_blocking(&path))
+        .await
+        .map_err(|e| format!("Falha ao ler status Git: {e}"))
+        .and_then(|r| r)
+}
+
+#[tauri::command]
+async fn git_commit_workspace(path: String, message: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || tools::git_commit_blocking(&path, &message))
+        .await
+        .map_err(|e| format!("Falha ao commitar alterações: {e}"))
+        .and_then(|r| r)
+}
+
+#[tauri::command]
+async fn append_assistant_note(
+    state: State<'_, Arc<AppState>>,
+    conversation_id: String,
+    text: String,
+) -> Result<StoredMessage, String> {
+    let msg = StoredMessage {
+        id: Uuid::new_v4().to_string(),
+        role: "assistant".to_string(),
+        text,
+        timestamp: Utc::now().to_rfc3339(),
+        mode: Some("responding".to_string()),
+        tool_events: Vec::new(),
+    };
+    storage::append_message(&state.data_dir, &conversation_id, msg.clone())?;
+    Ok(msg)
+}
+
 fn setup_tray(app: &AppHandle, state: Arc<AppState>) -> tauri::Result<()> {
     let toggle_item =
         MenuItem::with_id(app, "toggle", "Mostrar / Ocultar J.A.R.V.I.S.", true, None::<&str>)?;
@@ -1383,6 +1417,9 @@ fn main() {
             set_mascot_visible,
             sync_mascot_state,
             mascot_action,
+            get_git_repo_status,
+            git_commit_workspace,
+            append_assistant_note,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run the JARVIS desktop application");

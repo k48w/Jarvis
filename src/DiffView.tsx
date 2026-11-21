@@ -1,13 +1,21 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Check,
   Copy,
   FileCode2,
   FilePlus2,
+  GitBranch,
+  GitCommitHorizontal,
+  RefreshCw,
   RotateCcw,
   Trash2,
 } from "lucide-react";
-import type { FileDiffEvent } from "./bridge";
+import {
+  getGitRepoStatus,
+  gitCommitWorkspace,
+  type FileDiffEvent,
+  type GitRepoStatus,
+} from "./bridge";
 
 export interface FileDiffRecord extends FileDiffEvent {
   reverted?: boolean;
@@ -128,16 +136,58 @@ function computeLineDiff(oldText: string, newText: string): {
 
 export function DiffView({
   diffs,
+  projectPath,
   onRevert,
   onClearAll,
 }: {
   diffs: FileDiffRecord[];
+  projectPath?: string | null;
   onRevert: (diff: FileDiffRecord) => Promise<void>;
   onClearAll: () => void;
 }) {
   const [selectedId, setSelectedId] = useState<string>(diffs[0]?.id ?? "");
   const [revertingId, setRevertingId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [gitStatus, setGitStatus] = useState<GitRepoStatus | null>(null);
+  const [gitBusy, setGitBusy] = useState(false);
+  const [commitMsg, setCommitMsg] = useState("");
+  const [gitNotice, setGitNotice] = useState<string | null>(null);
+
+  async function refreshGit(targetPath: string) {
+    setGitBusy(true);
+    try {
+      const st = await getGitRepoStatus(targetPath);
+      setGitStatus(st);
+    } catch {
+      setGitStatus(null);
+    } finally {
+      setGitBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (projectPath) {
+      void refreshGit(projectPath);
+    } else {
+      setGitStatus(null);
+    }
+  }, [projectPath, diffs.length]);
+
+  async function handleCommit() {
+    if (!projectPath || !commitMsg.trim() || gitBusy) return;
+    setGitBusy(true);
+    setGitNotice(null);
+    try {
+      const res = await gitCommitWorkspace(projectPath, commitMsg.trim());
+      setCommitMsg("");
+      setGitNotice(res);
+      await refreshGit(projectPath);
+    } catch (e) {
+      setGitNotice(`Erro: ${String(e)}`);
+    } finally {
+      setGitBusy(false);
+    }
+  }
 
   const selected =
     diffs.find((d) => d.id === selectedId) ?? diffs[0] ?? null;
@@ -197,6 +247,58 @@ export function DiffView({
           <Trash2 /> Limpar
         </button>
       </div>
+
+      {projectPath && gitStatus?.isGitRepo && (
+        <div className="git-workspace-bar" aria-label="Status Git do projeto">
+          <div className="git-ws-meta">
+            <span className="git-branch-pill">
+              <GitBranch size={13} /> {gitStatus.branch}
+            </span>
+            <span className="git-changes-count">
+              {gitStatus.changes.length === 0
+                ? "Árvore limpa"
+                : `${gitStatus.changes.length} arquivo(s) modificado(s)`}
+            </span>
+            {(gitStatus.ahead > 0 || gitStatus.behind > 0) && (
+              <span className="git-sync-pill">
+                ↑{gitStatus.ahead} ↓{gitStatus.behind}
+              </span>
+            )}
+            <button
+              type="button"
+              className="mini-btn"
+              disabled={gitBusy}
+              onClick={() => void refreshGit(projectPath)}
+              title="Atualizar status Git"
+            >
+              <RefreshCw size={12} />
+            </button>
+          </div>
+          {gitStatus.changes.length > 0 && (
+            <div className="git-commit-row">
+              <input
+                type="text"
+                className="git-commit-input"
+                placeholder="Mensagem do commit (ex: feat: nova melhoria)..."
+                value={commitMsg}
+                onChange={(e) => setCommitMsg(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void handleCommit();
+                }}
+              />
+              <button
+                type="button"
+                className="mini-btn accent"
+                disabled={gitBusy || !commitMsg.trim()}
+                onClick={() => void handleCommit()}
+              >
+                <GitCommitHorizontal size={13} /> Commitar
+              </button>
+            </div>
+          )}
+          {gitNotice && <div className="git-notice">{gitNotice}</div>}
+        </div>
+      )}
 
       <div className="diff-layout">
         <aside className="diff-sidebar" aria-label="Arquivos alterados">

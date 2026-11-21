@@ -509,6 +509,62 @@ pub fn tool_catalog() -> Vec<ToolSpec> {
             risk: ToolRisk::Read,
             parameters: || json!({ "type": "object", "properties": {} }),
         },
+        ToolSpec {
+            name: "git_status",
+            title: "Ver status Git do repositório",
+            description: "Mostra a branch atual, commits à frente/atrás e arquivos modificados ou não rastreados em um repositório Git local.",
+            risk: ToolRisk::Read,
+            parameters: || json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Pasta do repositório Git (obrigatório se não estiver implícito no projeto atual)." }
+                },
+                "required": ["path"]
+            }),
+        },
+        ToolSpec {
+            name: "git_diff",
+            title: "Ver diff Git do repositório",
+            description: "Mostra as alterações linha a linha (git diff) no repositório local, opcionalmente filtradas por arquivo ou apenas staged.",
+            risk: ToolRisk::Read,
+            parameters: || json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Pasta do repositório Git." },
+                    "file": { "type": "string", "description": "Arquivo específico opcional dentro do repositório." },
+                    "staged": { "type": "boolean", "description": "Se true, mostra apenas alterações staged (--cached)." }
+                },
+                "required": ["path"]
+            }),
+        },
+        ToolSpec {
+            name: "git_log",
+            title: "Ver histórico de commits Git",
+            description: "Lista os últimos commits do repositório Git com hash, data relativa, autor e mensagem.",
+            risk: ToolRisk::Read,
+            parameters: || json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Pasta do repositório Git." },
+                    "limit": { "type": "integer", "description": "Quantidade de commits (padrão 10, máx 30)." }
+                },
+                "required": ["path"]
+            }),
+        },
+        ToolSpec {
+            name: "git_commit",
+            title: "Fazer commit Git",
+            description: "Adiciona alterações (git add) e cria um commit local com a mensagem informada. Não faz push automaticamente.",
+            risk: ToolRisk::Action,
+            parameters: || json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Pasta do repositório Git." },
+                    "message": { "type": "string", "description": "Mensagem clara do commit." }
+                },
+                "required": ["path", "message"]
+            }),
+        },
     ]
 }
 
@@ -569,7 +625,7 @@ pub fn check_permission_policy(
             ToolRisk::Action => PermissionDecision::NeedApproval,
         },
         PermissionMode::Safe => match name {
-            "get_datetime" | "web_search" | "fetch_webpage" | "save_memory" | "list_timers" => {
+            "get_datetime" | "web_search" | "fetch_webpage" | "save_memory" | "list_timers" | "check_agents" => {
                 PermissionDecision::Allow
             }
             _ => PermissionDecision::Deny(
@@ -644,6 +700,8 @@ pub fn format_args_summary(name: &str, args: &Value) -> String {
             args["query"].as_str().unwrap_or(""),
             args["path"].as_str().unwrap_or("")
         ),
+        "git_status" | "git_diff" | "git_log" => args["path"].as_str().unwrap_or("").to_string(),
+        "git_commit" => args["message"].as_str().unwrap_or("").chars().take(48).collect(),
         _ => String::new(),
     }
 }
@@ -1793,6 +1851,56 @@ pub async fn execute_tool_with_policy(
                 }
                 Err(e) => Err(e),
             }
+        }
+        "git_status" => {
+            let raw_path = args["path"].as_str().unwrap_or(".").to_string();
+            tokio::task::spawn_blocking(move || {
+                let st = git_repo_status_blocking(&raw_path)?;
+                if !st.is_git_repo {
+                    return Ok(format!("A pasta '{}' não é um repositório Git.", st.path));
+                }
+                let mut lines = vec![format!(
+                    "Repositório: {}\nBranch: {} (ahead {}, behind {})",
+                    st.path, st.branch, st.ahead, st.behind
+                )];
+                if st.changes.is_empty() {
+                    lines.push("Árvore limpa — nenhuma alteração pendente.".to_string());
+                } else {
+                    lines.push(format!("Alterações ({}):", st.changes.len()));
+                    for c in st.changes.iter().take(40) {
+                        lines.push(format!("  [{}] {}", c.status, c.path));
+                    }
+                }
+                Ok(lines.join("\n"))
+            })
+            .await
+            .map_err(|e| format!("Falha ao consultar git status: {e}"))
+            .and_then(|r| r)
+        }
+        "git_diff" => {
+            let raw_path = args["path"].as_str().unwrap_or(".").to_string();
+            let file = args["file"].as_str().map(str::to_string);
+            let staged = args["staged"].as_bool().unwrap_or(false);
+            tokio::task::spawn_blocking(move || tool_git_diff(&raw_path, file.as_deref(), staged))
+                .await
+                .map_err(|e| format!("Falha ao obter git diff: {e}"))
+                .and_then(|r| r)
+        }
+        "git_log" => {
+            let raw_path = args["path"].as_str().unwrap_or(".").to_string();
+            let limit = args["limit"].as_u64().unwrap_or(10).clamp(1, 30) as usize;
+            tokio::task::spawn_blocking(move || tool_git_log(&raw_path, limit))
+                .await
+                .map_err(|e| format!("Falha ao obter git log: {e}"))
+                .and_then(|r| r)
+        }
+        "git_commit" => {
+            let raw_path = args["path"].as_str().unwrap_or(".").to_string();
+            let msg = args["message"].as_str().unwrap_or("").to_string();
+            tokio::task::spawn_blocking(move || git_commit_blocking(&raw_path, &msg))
+                .await
+                .map_err(|e| format!("Falha ao executar git commit: {e}"))
+                .and_then(|r| r)
         }
         _ => Err(format!("Ferramenta não implementada: {name}")),
     };
@@ -3525,6 +3633,192 @@ pub fn read_clipboard_blocking() -> Result<ClipboardContent, String> {
             height: None,
         })
     }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitChangeItem {
+    pub status: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRepoStatus {
+    pub is_git_repo: bool,
+    pub path: String,
+    pub branch: String,
+    pub ahead: i32,
+    pub behind: i32,
+    pub changes: Vec<GitChangeItem>,
+}
+
+fn run_git_cmd(dir: &std::path::Path, args: &[&str]) -> Result<std::process::Output, String> {
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(args).current_dir(dir);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd.output()
+        .map_err(|e| format!("Falha ao executar git (verifique se o Git está instalado): {e}"))
+}
+
+pub fn git_repo_status_blocking(raw_path: &str) -> Result<GitRepoStatus, String> {
+    let dir = resolve_user_path(raw_path)?;
+    if !dir.exists() || !dir.is_dir() {
+        return Err(format!("Pasta não encontrada: {}", dir.display()));
+    }
+    let out = run_git_cmd(&dir, &["status", "--porcelain=v1", "-b"])?;
+    if !out.status.success() {
+        return Ok(GitRepoStatus {
+            is_git_repo: false,
+            path: dir.to_string_lossy().to_string(),
+            branch: String::new(),
+            ahead: 0,
+            behind: 0,
+            changes: Vec::new(),
+        });
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut branch = "HEAD".to_string();
+    let mut ahead = 0i32;
+    let mut behind = 0i32;
+    let mut changes = Vec::new();
+
+    for line in stdout.lines() {
+        if let Some(rest) = line.strip_prefix("## ") {
+            let clean = rest.trim();
+            branch = clean
+                .split("...")
+                .next()
+                .unwrap_or(clean)
+                .trim_start_matches("No commits yet on ")
+                .to_string();
+            if let Some(bracket_start) = clean.find('[') {
+                let meta = &clean[bracket_start + 1..clean.len().saturating_sub(1)];
+                for part in meta.split(',') {
+                    let p = part.trim();
+                    if let Some(v) = p.strip_prefix("ahead ") {
+                        ahead = v.trim().parse().unwrap_or(0);
+                    } else if let Some(v) = p.strip_prefix("behind ") {
+                        behind = v.trim().parse().unwrap_or(0);
+                    }
+                }
+            }
+        } else if line.len() >= 4 {
+            let st = line[..2].trim().to_string();
+            let file_path = line[3..].trim().trim_matches('"').to_string();
+            if !file_path.is_empty() {
+                changes.push(GitChangeItem {
+                    status: if st.is_empty() { "M".to_string() } else { st },
+                    path: file_path,
+                });
+            }
+        }
+    }
+
+    Ok(GitRepoStatus {
+        is_git_repo: true,
+        path: dir.to_string_lossy().to_string(),
+        branch,
+        ahead,
+        behind,
+        changes,
+    })
+}
+
+pub fn tool_git_diff(raw_path: &str, file: Option<&str>, staged: bool) -> Result<String, String> {
+    let dir = resolve_user_path(raw_path)?;
+    if !dir.exists() || !dir.is_dir() {
+        return Err(format!("Pasta não encontrada: {}", dir.display()));
+    }
+    let mut args = vec!["diff", "--no-color"];
+    if staged {
+        args.push("--cached");
+    }
+    if let Some(f) = file.map(str::trim).filter(|s| !s.is_empty()) {
+        args.push("--");
+        args.push(f);
+    }
+    let out = run_git_cmd(&dir, &args)?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("git diff falhou: {}", err.trim()));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    if text.trim().is_empty() {
+        return Ok("Nenhuma diferença encontrada no git diff.".to_string());
+    }
+    let preview: String = text.chars().take(12_000).collect();
+    if text.chars().count() > 12_000 {
+        Ok(format!("{preview}\n... (diff truncado em 12.000 caracteres)"))
+    } else {
+        Ok(preview)
+    }
+}
+
+pub fn tool_git_log(raw_path: &str, limit: usize) -> Result<String, String> {
+    let dir = resolve_user_path(raw_path)?;
+    if !dir.exists() || !dir.is_dir() {
+        return Err(format!("Pasta não encontrada: {}", dir.display()));
+    }
+    let limit_arg = format!("-n{}", limit.clamp(1, 30));
+    let out = run_git_cmd(
+        &dir,
+        &["log", &limit_arg, "--pretty=format:%h · %cr · %an · %s"],
+    )?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("git log falhou: {}", err.trim()));
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if text.is_empty() {
+        Ok("Nenhum commit encontrado neste repositório.".to_string())
+    } else {
+        Ok(text)
+    }
+}
+
+pub fn git_commit_blocking(raw_path: &str, message: &str) -> Result<String, String> {
+    let dir = resolve_user_path(raw_path)?;
+    if !dir.exists() || !dir.is_dir() {
+        return Err(format!("Pasta não encontrada: {}", dir.display()));
+    }
+    let msg = message.trim();
+    if msg.is_empty() {
+        return Err("Informe uma mensagem de commit válida.".to_string());
+    }
+    let st = git_repo_status_blocking(raw_path)?;
+    if !st.is_git_repo {
+        return Err(format!("A pasta '{}' não é um repositório Git.", dir.display()));
+    }
+    if st.changes.is_empty() {
+        return Err("Não há alterações pendentes para commitar.".to_string());
+    }
+    let add_out = run_git_cmd(&dir, &["add", "-A"])?;
+    if !add_out.status.success() {
+        return Err(format!(
+            "git add falhou: {}",
+            String::from_utf8_lossy(&add_out.stderr).trim()
+        ));
+    }
+    let commit_out = run_git_cmd(&dir, &["commit", "-m", msg])?;
+    if !commit_out.status.success() {
+        return Err(format!(
+            "git commit falhou: {}",
+            String::from_utf8_lossy(&commit_out.stderr).trim()
+        ));
+    }
+    let summary = String::from_utf8_lossy(&commit_out.stdout)
+        .lines()
+        .next()
+        .unwrap_or("Commit criado com sucesso.")
+        .trim()
+        .to_string();
+    Ok(format!("Commit criado em {}: {summary}", st.branch))
 }
 
 #[cfg(test)]

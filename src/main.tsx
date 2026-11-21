@@ -72,6 +72,7 @@ import {
   logoutGoogle,
   onAgentSpawned,
   onAgentCompletedSummary,
+  appendAssistantNote,
   onBrowserPanel,
   onChatEvent,
   onFileDiff,
@@ -1316,17 +1317,23 @@ function App() {
 
     void onAgentCompletedSummary((ev) => {
       notifyMascot(ev.spokenSummary, "cheer");
+      const summaryText = `**Resumo do agente ${ev.agentName}:**\n\n${ev.cardSummary}`;
       setMessages((prev) => [
         ...prev,
         {
           id: `agent-summary-${ev.agentId}`,
           role: "assistant",
-          text: `**Resumo do agente ${ev.agentName}:**\n\n${ev.cardSummary}`,
+          text: summaryText,
           timestamp: new Date().toISOString(),
           mode: "responding",
           tool_events: [],
         } as (typeof messages)[number],
       ]);
+      if (activeConvIdRef.current) {
+        void appendAssistantNote(activeConvIdRef.current, summaryText)
+          .then(() => refreshLists())
+          .catch(() => {});
+      }
       if (
         isTauri &&
         configRef.current.tts_engine !== "off" &&
@@ -2054,6 +2061,11 @@ function App() {
         {!immersive && workspaceView === "diff" && fileDiffs.length > 0 && (
           <DiffView
             diffs={fileDiffs}
+            projectPath={
+              activeProjectId
+                ? (projects.find((p) => p.id === activeProjectId)?.path ?? null)
+                : null
+            }
             onRevert={handleRevertDiff}
             onClearAll={() => {
               setFileDiffs([]);

@@ -989,6 +989,40 @@ fn shorten_sentence(sent: &str, max: usize) -> String {
     s.push('.');
     s
 }
+fn tasks_are_similar_or_status_check(existing_task: &str, new_task: &str) -> bool {
+    let new_lower = new_task.to_ascii_lowercase();
+    let status_hints = [
+        "terminou",
+        "concluiu",
+        "status",
+        "andamento",
+        "pronto",
+        "acabou",
+        "resultado do agente",
+        "verificar agente",
+        "checar agente",
+    ];
+    if status_hints.iter().any(|h| new_lower.contains(h)) {
+        return true;
+    }
+
+    let words = |s: &str| -> std::collections::HashSet<String> {
+        s.to_ascii_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.chars().count() >= 4)
+            .map(str::to_string)
+            .collect()
+    };
+    let a = words(existing_task);
+    let b = words(new_task);
+    if a.is_empty() || b.is_empty() {
+        return existing_task.eq_ignore_ascii_case(new_task);
+    }
+    let inter = a.intersection(&b).count();
+    let min_len = a.len().min(b.len());
+    inter * 2 >= min_len
+}
+
 pub fn spawn_background_agent(
     app: &AppHandle,
     state: &Arc<AppState>,
@@ -1014,13 +1048,25 @@ pub fn spawn_background_agent(
             return Err("Descreva a missão do agente antes de iniciar.".to_string());
         }
 
-        // Prevent duplicate agents if an agent is already running
+        // Prevent duplicate/status-check agents while allowing up to 3 parallel distinct missions
         {
             let runs = state.agent_runs.lock().await;
-            if let Some(existing) = runs.iter().find(|r| r.status == "running") {
+            let running: Vec<&crate::state::AgentRunSnapshot> =
+                runs.iter().filter(|r| r.status == "running").collect();
+            if let Some(existing) = running
+                .iter()
+                .find(|r| tasks_are_similar_or_status_check(&r.task, &clean_task))
+            {
                 return Ok(format!(
                     "ALREADY_RUNNING:{}:{}:{}",
                     existing.id, existing.name, existing.task
+                ));
+            }
+            if running.len() >= 3 {
+                let first = running[0];
+                return Ok(format!(
+                    "ALREADY_RUNNING:{}:{}:{} (limite de 3 agentes simultâneos atingido)",
+                    first.id, first.name, first.task
                 ));
             }
         }

@@ -5226,7 +5226,6 @@ body.mascot-window-root {
   font: 600 10px Consolas, monospace;
 }
 
-
 /* Clear product copy and graceful graphics fallback. */
 .lp-demo-notice { margin: 0; padding: 14px 16px; border-left: 3px solid var(--accent); background: rgba(12,30,43,.88); color: #d1e5f0; font-size: 14px; line-height: 1.6; }
 .lp-demo-notice strong { color: #f4fbff; }
@@ -5256,4 +5255,64 @@ body.mascot-window-root {
 }
 @media (prefers-reduced-motion: reduce) {
   .lp-root *, .stage-fallback * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+
+/* ---- Git Workspace Bar inside DiffView ---- */
+.git-workspace-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+  border-radius: 12px;
+  background: rgba(12, 22, 38, 0.72);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+}
+.git-ws-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: rgba(226, 232, 240, 0.88);
+}
+.git-branch-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.14);
+  border: 1px solid rgba(56, 189, 248, 0.34);
+  color: #7dd3fc;
+  font-weight: 600;
+}
+.git-sync-pill {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #cbd5e1;
+}
+.git-commit-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.git-commit-input {
+  flex: 1;
+  background: rgba(4, 9, 18, 0.78);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 8px;
+  padding: 7px 11px;
+  color: #f8fafc;
+  font-size: 12.5px;
+  outline: none;
+}
+.git-commit-input:focus {
+  border-color: rgba(56, 189, 248, 0.6);
+}
+.git-notice {
+  font-size: 12px;
+  color: #7dd3fc;
 }
