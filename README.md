@@ -6,7 +6,22 @@
 ![Platform](https://img.shields.io/badge/Platform-Windows%20x64-0078D6?logo=windows&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-Assistente pessoal cinematográfico de desktop para **Windows**, construído em **Tauri 2 + Rust nativo + React 19 + Three.js**, com núcleo holográfico de plasma 3D reativo à voz, mascote animado global na área de trabalho, Wake Word nativo (`"Ei, Jarvis"`), visão inteligente de jogos/janelas, navegador embutido 60fps controlado por IA, subagentes paralelos, projetos estilo Codex e painel de Diff com desfazer em 1 clique.
+> 🌐 **Site Oficial & Simulador 3D Web:** [https://jarvis-cinematic.vercel.app](https://jarvis-cinematic.vercel.app)  
+> 📦 **Download Direto do Instalador Windows (`v8.0.0`):** [JARVIS_8.0.0_x64-setup.exe](https://github.com/k48w/Jarvis/releases/download/v8.0.0/JARVIS_8.0.0_x64-setup.exe) · [JARVIS.exe (Portátil)](https://github.com/k48w/Jarvis/releases/download/v8.0.0/JARVIS.exe)
+
+Assistente pessoal cinematográfico de desktop para **Windows**, construído em **Tauri 2 + Rust nativo + React 19 + Three.js**, com núcleo holográfico de plasma 3D reativo à voz, mascote animado global na área de trabalho, Wake Word nativo (`"Ei, Jarvis"`), visão inteligente de jogos/janelas, navegador embutido 60fps controlado por IA, subagentes paralelos, projetos estilo Codex, paleta de comandos `Ctrl+K` e painel de Diff com desfazer em 1 clique.
+
+<details>
+<summary><strong>🇺🇸 English Summary (Click to expand)</strong></summary>
+
+**J.A.R.V.I.S. V8.0 — The Singularity Edition** is a native Windows AI desktop copilot built with **Tauri 2, pure Win32 Rust, React 19, and Three.js (GLSL)**.
+- **3D Voice-Reactive Plasma Core**: 60fps WebGL2 shaders, 3 gyroscopic rings, SVG orbital reticle, and 4 live themes (*Stark Cyan*, *Arc Gold*, *Quantum Violet*, *Crimson Core*).
+- **Always-On-Top Global Desktop Mascot**: transparent draggable companion across your entire PC with live speech bubbles, animated reactions, and a right-click quick action menu.
+- **Native Rust Win32 Microphone & `"Ei, Jarvis"` Wake Word**: direct `waveIn` 16kHz PCM capture with local VAD (0% network usage during silence), Hands-Free continuous conversation, **ElevenLabs Scribe STT**, and **ElevenLabs Flash v2.5 TTS** with local SHA-256 disk caching.
+- **Smart Background Game & Window Vision**: automatically identifies open windows (`list_open_windows`) and captures specific apps/games behind your browser using `PrintWindow(PW_RENDERFULLCONTENT)` without stealing focus, with automatic **DXGI Desktop Duplication** fallback for DirectX/Vulkan games and `WDA_EXCLUDEFROMCAPTURE` self-exclusion.
+- **60fps Split-Screen Embedded Browser (CDP) & Parallel Subagents**: autonomous Chromium child WebView2 + background research agents.
+- **Codex-Style Projects, Colored Diff Viewer with 1-Click Undo & Native `Ctrl+C` Clipboard Reader**: attach folders, inspect line-by-line diffs, revert edits with 1 click, drag-and-drop files, or ask J.A.R.V.I.S. to analyze copied text/screenshots directly from the Windows clipboard.
+</details>
 
 ![Prévia do J.A.R.V.I.S. Desktop](docs/assistant-desktop.png)
 
