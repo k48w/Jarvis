@@ -989,7 +989,7 @@ fn read_windows_power_status() -> String {
 }
 
 #[cfg(windows)]
-fn set_windows_volume_blocking(level: Option<u8>, muted: Option<bool>) -> Result<String, String> {
+pub(crate) fn set_windows_volume_blocking(level: Option<u8>, muted: Option<bool>) -> Result<String, String> {
     use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
     use windows::Win32::Media::Audio::{eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator};
     use windows::Win32::System::Com::{
@@ -1034,12 +1034,12 @@ fn set_windows_volume_blocking(level: Option<u8>, muted: Option<bool>) -> Result
 }
 
 #[cfg(not(windows))]
-fn set_windows_volume_blocking(_level: Option<u8>, _muted: Option<bool>) -> Result<String, String> {
+pub(crate) fn set_windows_volume_blocking(_level: Option<u8>, _muted: Option<bool>) -> Result<String, String> {
     Err("Controle de volume disponível apenas no Windows".to_string())
 }
 
 #[cfg(windows)]
-fn send_media_key(action: &str) -> Result<String, String> {
+pub(crate) fn send_media_key(action: &str) -> Result<String, String> {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
         KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_MEDIA_NEXT_TRACK, VK_MEDIA_PLAY_PAUSE,
@@ -1090,7 +1090,7 @@ fn send_media_key(action: &str) -> Result<String, String> {
 }
 
 #[cfg(not(windows))]
-fn send_media_key(_action: &str) -> Result<String, String> {
+pub(crate) fn send_media_key(_action: &str) -> Result<String, String> {
     Err("Controle de mídia disponível apenas no Windows".to_string())
 }
 
@@ -1264,7 +1264,7 @@ async fn run_powershell(command: &str) -> Result<String, String> {
     Ok(combined.chars().take(4000).collect())
 }
 
-async fn run_set_timer(
+pub(crate) async fn run_set_timer(
     app: &AppHandle,
     state: &Arc<AppState>,
     seconds: u64,
@@ -2384,7 +2384,7 @@ pub fn capture_desktop_screen_blocking() -> Result<(u32, u32, u32, u32, String),
     }
 }
 
-fn set_jarvis_capture_exclusion(app: &AppHandle, exclude: bool) -> Vec<isize> {
+pub(crate) fn set_jarvis_capture_exclusion(app: &AppHandle, exclude: bool) -> Vec<isize> {
     #[cfg(windows)]
     {
         use tauri::Manager;
@@ -2419,18 +2419,18 @@ fn set_jarvis_capture_exclusion(app: &AppHandle, exclude: bool) -> Vec<isize> {
 }
 
 #[derive(Debug, Clone)]
-struct OpenWindowInfo {
-    hwnd: isize,
+pub(crate) struct OpenWindowInfo {
+    pub(crate) hwnd: isize,
     #[allow(dead_code)]
-    pid: u32,
-    process_name: String,
-    title: String,
-    minimized: bool,
-    width: i32,
-    height: i32,
+    pub(crate) pid: u32,
+    pub(crate) process_name: String,
+    pub(crate) title: String,
+    pub(crate) minimized: bool,
+    pub(crate) width: i32,
+    pub(crate) height: i32,
 }
 
-fn list_open_windows_info_blocking() -> Vec<OpenWindowInfo> {
+pub(crate) fn list_open_windows_info_blocking() -> Vec<OpenWindowInfo> {
     #[cfg(windows)]
     {
         use std::collections::HashMap;
@@ -2865,7 +2865,7 @@ fn capture_window_printwindow(hwnd_raw: isize) -> Result<(u32, u32, u32, u32, St
     }
 }
 
-fn capture_target_window_blocking(
+pub(crate) fn capture_target_window_blocking(
     query: &str,
     open_wins: &[OpenWindowInfo],
 ) -> Result<((u32, u32, u32, u32, String), String, &'static str), String> {

@@ -21,6 +21,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
+  Smartphone,
   Sparkles,
   Square,
   Terminal,
@@ -88,6 +89,8 @@ import {
   toggleRoutine,
   deleteRoutine,
   onRoutineTrigger,
+  onCompanionSync,
+  onApprovalResolved,
   type SkillItem,
   type RoutineItem,
   onBrowserPanel,
@@ -1394,6 +1397,8 @@ function App() {
     let unFileDiff: (() => void) | undefined;
     let unTerminal: (() => void) | undefined;
     let unRoutine: (() => void) | undefined;
+    let unCompanion: (() => void) | undefined;
+    let unApprovalResolved: (() => void) | undefined;
     let pulseTimer = 0;
 
     void listSkills().then(setSkills).catch(() => {});
@@ -1725,6 +1730,31 @@ function App() {
       unRoutine = fn;
     });
 
+    void onCompanionSync((ev) => {
+      const targetId = ev.conversationId;
+      if (targetId && targetId !== activeConvIdRef.current) {
+        setActiveConvId(targetId);
+        activeConvIdRef.current = targetId;
+      }
+      if (targetId) {
+        void getConversation(targetId)
+          .then((conv) => {
+            setMessages(conv.messages);
+            setActiveProjectId(conv.project_id ?? null);
+          })
+          .catch(() => {});
+      }
+      void refreshLists();
+    }).then((fn) => {
+      unCompanion = fn;
+    });
+
+    void onApprovalResolved(() => {
+      setPendingApproval(null);
+    }).then((fn) => {
+      unApprovalResolved = fn;
+    });
+
     return () => {
       unChat?.();
       unApprove?.();
@@ -1737,6 +1767,8 @@ function App() {
       unFileDiff?.();
       unTerminal?.();
       unRoutine?.();
+      unCompanion?.();
+      unApprovalResolved?.();
       window.clearTimeout(pulseTimer);
     };
   }, []);
@@ -2081,6 +2113,21 @@ function App() {
               }
             >
               <Terminal />
+            </button>
+          )}
+          {!immersive && (
+            <button
+              aria-label="Conectar Celular"
+              title="Conectar Celular (QR Code)"
+              aria-expanded={drawer === "settings" && settingsTab === "mobile"}
+              onClick={() => {
+                setSettingsTab("mobile");
+                setDrawer((d) =>
+                  d === "settings" && settingsTab === "mobile" ? "none" : "settings",
+                );
+              }}
+            >
+              <Smartphone />
             </button>
           )}
           {!immersive && (

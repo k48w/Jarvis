@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import QRCode from "qrcode";
 import {
   Check,
+  Copy,
   Download,
   Folder,
   FolderPlus,
@@ -12,6 +14,8 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  ShieldCheck,
+  Smartphone,
   Trash2,
   Upload,
   Volume2,
@@ -19,15 +23,20 @@ import {
 } from "lucide-react";
 import { listAudioInputDevices, openMicStream } from "./voice";
 import {
+  allowCompanionFirewall,
+  getCompanionInfo,
   isTauri,
   listMicrophones,
   onMicTestError,
   onMicTestLevel,
+  regenerateCompanionToken,
+  setCompanionEnabled,
   startNativeMicTest,
   stopNativeMicTest,
   type AllKeyStatus,
   type AppConfig,
   type ChatGptAuthStatus,
+  type CompanionInfo,
   type ConnectionTestResult,
   type ConversationSummary,
   type ElevenLabsVoice,
@@ -47,7 +56,7 @@ import type { VisualTheme } from "./Stage";
 
 export type Quality = "Low" | "High" | "Ultra";
 export type HistoryTab = "conversations" | "memory";
-export type SettingsTab = "ai" | "voice" | "system" | "visual";
+export type SettingsTab = "ai" | "voice" | "system" | "visual" | "mobile";
 
 interface HistoryDrawerProps {
   tab: HistoryTab;
@@ -601,6 +610,37 @@ export function SettingsDrawer({
   const micTestCleanupRef = useRef<(() => void) | null>(null);
   const googleFileRef = useRef<HTMLInputElement>(null);
 
+  const [companionInfo, setCompanionInfo] = useState<CompanionInfo | null>(null);
+  const [companionQr, setCompanionQr] = useState<string>("");
+  const [companionBusy, setCompanionBusy] = useState(false);
+  const [companionMsg, setCompanionMsg] = useState<string | null>(null);
+  const [copiedMobileUrl, setCopiedMobileUrl] = useState(false);
+
+  useEffect(() => {
+    if (tab !== "mobile") return;
+    let active = true;
+    const refresh = () => {
+      void getCompanionInfo()
+        .then(async (info) => {
+          if (!active) return;
+          setCompanionInfo(info);
+          const dataUrl = await QRCode.toDataURL(info.url, {
+            width: 210,
+            margin: 2,
+            color: { dark: "#050811", light: "#ffffff" },
+          }).catch(() => "");
+          if (active) setCompanionQr(dataUrl);
+        })
+        .catch(() => {});
+    };
+    refresh();
+    const id = window.setInterval(refresh, 3000);
+    return () => {
+      active = false;
+      clearInterval(id);
+    };
+  }, [tab]);
+
   useEffect(() => {
     if (tab !== "voice") return;
     if (isTauri) {
@@ -809,6 +849,7 @@ export function SettingsDrawer({
             ["voice", "Voz"],
             ["system", "Sistema"],
             ["visual", "Visual"],
+            ["mobile", "Celular"],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -1639,6 +1680,131 @@ export function SettingsDrawer({
               Reduzir movimento
             </label>
           </>
+        )}
+
+        {tab === "mobile" && (
+          <div className="companion-tab">
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={companionInfo?.enabled ?? true}
+                disabled={companionBusy}
+                onChange={async (e) => {
+                  setCompanionBusy(true);
+                  setCompanionMsg(null);
+                  try {
+                    const next = await setCompanionEnabled(e.target.checked);
+                    setCompanionInfo(next);
+                  } finally {
+                    setCompanionBusy(false);
+                  }
+                }}
+              />
+              <span>Conectar Celular na Rede Local (QR Code)</span>
+            </label>
+
+            {companionInfo && (
+              <>
+                <div className="companion-status-row">
+                  <span
+                    className={
+                      companionInfo.connectedClients > 0
+                        ? "companion-status-pill live"
+                        : "companion-status-pill"
+                    }
+                  >
+                    <Smartphone size={13} />
+                    {companionInfo.connectedClients > 0
+                      ? `${companionInfo.connectedClients} celular(es) conectado(s)`
+                      : `Aguardando conexão · Porta ${companionInfo.port}`}
+                  </span>
+                </div>
+
+                {companionInfo.enabled && companionQr && (
+                  <div className="companion-qr-card">
+                    <img src={companionQr} alt="QR Code Jarvis Companion" />
+                  </div>
+                )}
+
+                <div className="companion-url-row">
+                  <input
+                    type="text"
+                    readOnly
+                    value={companionInfo.url}
+                    aria-label="URL de pareamento"
+                  />
+                  <button
+                    type="button"
+                    className="mini-btn"
+                    onClick={async () => {
+                      await navigator.clipboard.writeText(companionInfo.url);
+                      setCopiedMobileUrl(true);
+                      setTimeout(() => setCopiedMobileUrl(false), 1600);
+                    }}
+                  >
+                    {copiedMobileUrl ? <Check size={13} /> : <Copy size={13} />}
+                    {copiedMobileUrl ? "Copiado" : "Copiar"}
+                  </button>
+                </div>
+
+                <div className="companion-actions-row">
+                  <button
+                    type="button"
+                    className="mini-btn"
+                    disabled={companionBusy}
+                    onClick={async () => {
+                      setCompanionBusy(true);
+                      try {
+                        const next = await regenerateCompanionToken();
+                        setCompanionInfo(next);
+                        const dataUrl = await QRCode.toDataURL(next.url, {
+                          width: 210,
+                          margin: 2,
+                          color: { dark: "#050811", light: "#ffffff" },
+                        }).catch(() => "");
+                        setCompanionQr(dataUrl);
+                        setCompanionMsg("Novo token gerado. Escaneie o QR Code novamente.");
+                      } finally {
+                        setCompanionBusy(false);
+                      }
+                    }}
+                  >
+                    <RefreshCw size={13} /> Novo Token
+                  </button>
+                  <button
+                    type="button"
+                    className="mini-btn accent"
+                    disabled={companionBusy}
+                    onClick={async () => {
+                      setCompanionBusy(true);
+                      setCompanionMsg(null);
+                      try {
+                        const msg = await allowCompanionFirewall();
+                        setCompanionMsg(msg);
+                      } catch (err) {
+                        setCompanionMsg(String(err));
+                      } finally {
+                        setCompanionBusy(false);
+                      }
+                    }}
+                  >
+                    <ShieldCheck size={13} /> Liberar Firewall
+                  </button>
+                </div>
+
+                {companionMsg && <p className="field-hint">{companionMsg}</p>}
+
+                <div className="companion-steps">
+                  <strong>Como conectar em 10 segundos:</strong>
+                  <ol>
+                    <li>Conecte o PC e o celular no mesmo Wi-Fi.</li>
+                    <li>Se o celular não abrir a página, clique em <b>Liberar Firewall</b> acima.</li>
+                    <li>Aponte a câmera do celular para o QR Code e toque em <b>Adicionar à Tela de Início</b> para usar como app.</li>
+                  </ol>
+                </div>
+              </>
+            )}
+          </div>
         )}
       </div>
     </aside>

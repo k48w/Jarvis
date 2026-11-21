@@ -1606,3 +1606,67 @@ export function onRoutineTrigger(
   }
   return subscribeBrowser("jarvis:routine-trigger", handler);
 }
+
+export interface CompanionInfo {
+  enabled: boolean;
+  port: number;
+  ip: string;
+  url: string;
+  token: string;
+  connectedClients: number;
+}
+
+let simCompanionEnabled = true;
+let simCompanionToken = "demo1234abcd5678ef901234567890ab";
+
+export async function getCompanionInfo(): Promise<CompanionInfo> {
+  if (isTauri) return invoke<CompanionInfo>("get_companion_info");
+  return {
+    enabled: simCompanionEnabled,
+    port: 47821,
+    ip: "192.168.1.100",
+    url: `http://192.168.1.100:47821/?token=${simCompanionToken}`,
+    token: simCompanionToken,
+    connectedClients: 0,
+  };
+}
+
+export async function setCompanionEnabled(enabled: boolean): Promise<CompanionInfo> {
+  if (isTauri) return invoke<CompanionInfo>("set_companion_enabled", { enabled });
+  simCompanionEnabled = enabled;
+  return getCompanionInfo();
+}
+
+export async function regenerateCompanionToken(): Promise<CompanionInfo> {
+  if (isTauri) return invoke<CompanionInfo>("regenerate_companion_token");
+  simCompanionToken = Math.random().toString(16).slice(2) + "abcd";
+  return getCompanionInfo();
+}
+
+export async function allowCompanionFirewall(): Promise<string> {
+  if (isTauri) return invoke<string>("allow_companion_firewall");
+  return "Porta liberada no Firewall (simulação web).";
+}
+
+export function onCompanionSync(
+  handler: (ev: { conversationId: string }) => void,
+): Promise<UnlistenFn> {
+  if (isTauri) {
+    return listen<{ conversationId: string }>("jarvis:companion-sync", (e) =>
+      handler(e.payload),
+    );
+  }
+  return Promise.resolve(() => {});
+}
+
+export function onApprovalResolved(
+  handler: (ev: { approvalId: string; approved: boolean }) => void,
+): Promise<UnlistenFn> {
+  if (isTauri) {
+    return listen<{ approvalId: string; approved: boolean }>(
+      "jarvis:approval-resolved",
+      (e) => handler(e.payload),
+    );
+  }
+  return Promise.resolve(() => {});
+}

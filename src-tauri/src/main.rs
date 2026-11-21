@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod browser;
+mod companion;
 mod config;
 mod google_oauth;
 mod llm;
@@ -405,38 +406,25 @@ async fn delete_memory(state: State<'_, Arc<AppState>>, id: String) -> Result<()
     storage::delete_memory(&state.data_dir, &id)
 }
 
-#[tauri::command]
-async fn send_message(
+pub(crate) async fn dispatch_chat_turn(
     app: AppHandle,
-    state: State<'_, Arc<AppState>>,
+    state_arc: Arc<AppState>,
     conversation_id: String,
     text: String,
-    image_base64: Option<String>,
-    image_mime: Option<String>,
+    attachment: Option<ImageAttachment>,
 ) -> Result<Conversation, String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Err("Mensagem vazia".to_string());
     }
 
-    let attachment = image_base64
-        .map(|b| b.trim().to_string())
-        .filter(|b| !b.is_empty())
-        .map(|data_base64| ImageAttachment {
-            mime_type: image_mime
-                .map(|m| m.trim().to_string())
-                .filter(|m| !m.is_empty())
-                .unwrap_or_else(|| "image/jpeg".to_string()),
-            data_base64,
-        });
-
     {
-        let mut active = state.active_cancel.lock().await;
+        let mut active = state_arc.active_cancel.lock().await;
         if let Some(prev_tx) = active.take() {
             let _ = prev_tx.send(true);
         }
     }
-    state.cancel_all_pending_approvals().await;
+    state_arc.cancel_all_pending_approvals().await;
 
     let stored_text = if attachment.is_some() {
         format!("{trimmed}\n[Captura de tela anexada]")
@@ -452,20 +440,19 @@ async fn send_message(
         mode: None,
         tool_events: Vec::new(),
     };
-    let updated_conv = storage::append_message(&state.data_dir, &conversation_id, user_msg)?;
+    let updated_conv = storage::append_message(&state_arc.data_dir, &conversation_id, user_msg)?;
 
     let (cancel_tx, cancel_rx) = watch::channel(false);
     {
-        let mut active = state.active_cancel.lock().await;
+        let mut active = state_arc.active_cancel.lock().await;
         *active = Some(cancel_tx);
     }
 
-    let state_arc = Arc::clone(&state);
     let conv_id = updated_conv.id.clone();
     let history = updated_conv.messages.clone();
     let project_path = updated_conv.project_path.clone();
 
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         let result = llm::run_chat_turn(
             &app,
             &state_arc,
@@ -543,6 +530,36 @@ async fn send_message(
 }
 
 #[tauri::command]
+async fn send_message(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    conversation_id: String,
+    text: String,
+    image_base64: Option<String>,
+    image_mime: Option<String>,
+) -> Result<Conversation, String> {
+    let attachment = image_base64
+        .map(|b| b.trim().to_string())
+        .filter(|b| !b.is_empty())
+        .map(|data_base64| ImageAttachment {
+            mime_type: image_mime
+                .map(|m| m.trim().to_string())
+                .filter(|m| !m.is_empty())
+                .unwrap_or_else(|| "image/jpeg".to_string()),
+            data_base64,
+        });
+
+    dispatch_chat_turn(
+        app,
+        Arc::clone(&state),
+        conversation_id,
+        text,
+        attachment,
+    )
+    .await
+}
+
+#[tauri::command]
 async fn cancel_chat(state: State<'_, Arc<AppState>>) -> Result<(), String> {
     {
         let mut active = state.active_cancel.lock().await;
@@ -557,6 +574,7 @@ async fn cancel_chat(state: State<'_, Arc<AppState>>) -> Result<(), String> {
 #[tauri::command]
 async fn resolve_tool_approval(
     state: State<'_, Arc<AppState>>,
+    companion: State<'_, Arc<companion::CompanionState>>,
     approval_id: String,
     approved: bool,
 ) -> Result<(), String> {
@@ -564,6 +582,14 @@ async fn resolve_tool_approval(
     if let Some(tx) = map.remove(&approval_id) {
         let _ = tx.send(approved);
     }
+    drop(map);
+    {
+        let mut pending = companion.pending_approval.lock().await;
+        *pending = None;
+    }
+    let _ = companion.events_tx.send(
+        json!({ "event": "approval_resolved", "data": { "approvalId": approval_id, "approved": approved } }).to_string(),
+    );
     Ok(())
 }
 
@@ -1301,6 +1327,41 @@ async fn delete_routine(
     routines::delete_routine(&state.data_dir, &id)
 }
 
+#[tauri::command]
+async fn get_companion_info(
+    companion: State<'_, Arc<companion::CompanionState>>,
+) -> Result<companion::CompanionInfo, String> {
+    Ok(companion.info().await)
+}
+
+#[tauri::command]
+async fn set_companion_enabled(
+    companion: State<'_, Arc<companion::CompanionState>>,
+    enabled: bool,
+) -> Result<companion::CompanionInfo, String> {
+    companion.enabled.store(enabled, Ordering::SeqCst);
+    Ok(companion.info().await)
+}
+
+#[tauri::command]
+async fn regenerate_companion_token(
+    companion: State<'_, Arc<companion::CompanionState>>,
+) -> Result<companion::CompanionInfo, String> {
+    companion.regenerate_token().await;
+    Ok(companion.info().await)
+}
+
+#[tauri::command]
+async fn allow_companion_firewall(
+    companion: State<'_, Arc<companion::CompanionState>>,
+) -> Result<String, String> {
+    let port = companion.port.load(Ordering::SeqCst);
+    tokio::task::spawn_blocking(move || companion::allow_companion_firewall_port(port))
+        .await
+        .map_err(|e| format!("Falha ao configurar firewall: {e}"))
+        .and_then(|r| r)
+}
+
 fn setup_tray(app: &AppHandle, state: Arc<AppState>) -> tauri::Result<()> {
     let toggle_item =
         MenuItem::with_id(app, "toggle", "Mostrar / Ocultar J.A.R.V.I.S.", true, None::<&str>)?;
@@ -1387,7 +1448,14 @@ fn main() {
             app.manage(Arc::clone(&app_state));
             app.manage(Arc::new(mic::MicController::default()));
             app.manage(Arc::new(terminal::TerminalController::default()));
+            let companion_state = Arc::new(companion::CompanionState::new());
+            app.manage(Arc::clone(&companion_state));
             routines::start_routines_scheduler(app.handle().clone(), app_state.data_dir.clone());
+            companion::start_companion_server(
+                app.handle().clone(),
+                Arc::clone(&app_state),
+                companion_state,
+            );
 
             #[cfg(windows)]
             if let Some(main_win) = app.get_webview_window("main") {
@@ -1518,6 +1586,10 @@ fn main() {
             create_routine,
             toggle_routine,
             delete_routine,
+            get_companion_info,
+            set_companion_enabled,
+            regenerate_companion_token,
+            allow_companion_firewall,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run the JARVIS desktop application");

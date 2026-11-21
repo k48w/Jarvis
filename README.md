@@ -20,6 +20,7 @@ Assistente desktop nativo para Windows feito em Tauri 2, Rust e React.
 - **Visão de janelas e jogos** — lista processos abertos e captura janelas específicas com `PrintWindow` e `DXGI` (inclusive em segundo plano), além de ler prints e texto direto do `Ctrl+C`.
 - **Terminal ao vivo e Git nativo** — aba de terminal PowerShell com saída em streaming e cancelamento em tempo real, ferramentas `git_status`, `git_diff`, `git_log` e `git_commit`, além de diff colorido com desfazer em 1 clique.
 - **Skills (`/comando`) e rotinas agendadas** — macros reutilizáveis como `/briefing`, `/saude-pc`, `/foco` e `/git-review`, mais um agendador em segundo plano para tarefas diárias ou por intervalo.
+- **Celular conectado ao PC (QR Code)** — servidor local em Rust em **Ajustes → Celular** que pareia um app mobile instalável (PWA) com chat sincronizado, Deck de controle (volume, mídia, CPU/RAM, Skills em 1 toque), visualização de janelas/tela do PC e aprovação remota de segurança.
 - **Agentes em paralelo** — até 3 tarefas rodando em segundo plano ao mesmo tempo; quando um agente termina, o próprio Jarvis fala e salva um resumo curto na conversa.
 - **Navegador embutido opcional** — WebView2 lado a lado com o chat quando você pede para abrir ou interagir com um site; buscas comuns acontecem silenciosamente em segundo plano.
 - **Presença no desktop** — atalho global `Alt + Space`, paleta de comandos `Ctrl + K` e mascote flutuante sempre no topo.

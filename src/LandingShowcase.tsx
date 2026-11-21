@@ -1039,6 +1039,13 @@ export function LandingShowcase({
                 <td>Sem automação recorrente no desktop</td>
               </tr>
               <tr>
+                <td>Celular ↔ PC (QR Code)</td>
+                <td className="highlight">
+                  <strong>PWA pareado na rede local</strong>: voz remota, Deck de Skills, tela do PC e aprovação 2FA
+                </td>
+                <td>Sem controle nativo do PC pelo celular</td>
+              </tr>
+              <tr>
                 <td>Navegador Integrado</td>
                 <td className="highlight">
                   <strong>WebView2 lado a lado</strong> com controle via CDP quando você pedir
