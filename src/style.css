@@ -4842,6 +4842,98 @@ body.mascot-window-root {
   color: #eef9ff;
 }
 
+/* Shortcuts & FAQ Dual Section */
+.lp-dual-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  gap: 20px;
+}
+
+.lp-shortcuts-card,
+.lp-faq-card {
+  padding: 24px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(5, 11, 19, 0.86);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.lp-shortcuts-card h3,
+.lp-faq-card h3 {
+  margin: 0;
+  font-size: 22px;
+  color: #f3fbff;
+}
+
+.lp-shortcut-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lp-sc-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 12px;
+  color: #bfd9ea;
+}
+
+.lp-sc-row kbd {
+  padding: 4px 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(var(--accent-rgb), 0.35);
+  background: rgba(var(--accent-rgb), 0.1);
+  color: var(--accent);
+  font: 600 11px Consolas, monospace;
+  white-space: nowrap;
+}
+
+.lp-sysreq-box {
+  margin-top: auto;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(var(--accent-rgb), 0.2);
+  background: rgba(var(--accent-rgb), 0.06);
+  font-size: 12px;
+  line-height: 1.5;
+  color: #9ec0d5;
+}
+
+.lp-faq-item {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.lp-faq-item summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  color: #eef9ff;
+}
+
+.lp-faq-item p {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #98bbd0;
+}
+
+@media (max-width: 1024px) {
+  .lp-dual-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Comparison Table */
 .lp-table-wrap {
   border-radius: 20px;

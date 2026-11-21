@@ -1055,6 +1055,72 @@ export function LandingShowcase({
         </div>
       </section>
 
+      {/* KEYBOARD SHORTCUTS & FAQ */}
+      <section className="lp-section">
+        <div className="lp-dual-grid">
+          <div className="lp-shortcuts-card">
+            <span className="lp-eyebrow">CONTROLE INSTANTÂNEO</span>
+            <h3>Atalhos de Teclado &amp; Requisitos</h3>
+            <div className="lp-shortcut-list">
+              <div className="lp-sc-row">
+                <kbd>Alt + Space</kbd>
+                <span>Chamar / ocultar J.A.R.V.I.S. sobre qualquer jogo ou app</span>
+              </div>
+              <div className="lp-sc-row">
+                <kbd>Ctrl + K</kbd>
+                <span>Abrir Paleta de Comandos Rápidos</span>
+              </div>
+              <div className="lp-sc-row">
+                <kbd>F11 / Alt+Enter</kbd>
+                <span>Alternar Tela Cheia real no Windows</span>
+              </div>
+              <div className="lp-sc-row">
+                <kbd>Ctrl + V</kbd>
+                <span>Colar print da área de transferência como anexo</span>
+              </div>
+              <div className="lp-sc-row">
+                <kbd>&ldquo;Ei, Jarvis&rdquo;</kbd>
+                <span>Ativação por voz mãos-livres (Win32 waveIn + VAD)</span>
+              </div>
+            </div>
+            <div className="lp-sysreq-box">
+              <strong>Requisitos Mínimos:</strong> Windows 10 ou 11 (x64) · WebView2 Runtime ·
+              40 MB de RAM livre · GPU compatível com WebGL2 / DirectX 11.
+            </div>
+          </div>
+
+          <div className="lp-faq-card">
+            <span className="lp-eyebrow">PERGUNTAS FREQUENTES</span>
+            <h3>Dúvidas Técnicas</h3>
+            <details className="lp-faq-item" open>
+              <summary>Preciso pagar chave de API da OpenAI para usar o ChatGPT?</summary>
+              <p>
+                Não. O J.A.R.V.I.S. implementa o fluxo oficial <strong>OAuth 2.0 + PKCE</strong>{" "}
+                para você entrar diretamente com sua assinatura ChatGPT Plus/Pro, ou usar
+                gratuitamente o Google Gemini (via API Key do AI Studio ou Google OAuth).
+              </p>
+            </details>
+            <details className="lp-faq-item">
+              <summary>Por que o antivírus não bloqueia a visão de tela do J.A.R.V.I.S.?</summary>
+              <p>
+                Porque 100% da captura e controle é feita em <strong>Rust compilado nativo</strong>{" "}
+                usando <code>PrintWindow</code>, <code>DXGI Desktop Duplication</code> e{" "}
+                <code>SendInput</code> — sem executar scripts ocultos de PowerShell que
+                disparam alertas do Windows Defender (AMSI).
+              </p>
+            </details>
+            <details className="lp-faq-item">
+              <summary>O Wake Word &ldquo;Ei, Jarvis&rdquo; gasta créditos enquanto estou calado?</summary>
+              <p>
+                Zero. A detecção de atividade de voz (VAD) roda localmente na sua CPU em Rust
+                (<code>waveIn 16kHz</code>). Ele só envia o trecho de 1–3 segundos para o
+                ElevenLabs Scribe / Gemini quando você realmente fala.
+              </p>
+            </details>
+          </div>
+        </div>
+      </section>
+
       {/* DOWNLOAD & BUILD CTA */}
       <section id="download" className="lp-section lp-download-section">
         <div className="lp-download-card">
