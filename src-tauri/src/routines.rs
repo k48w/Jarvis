@@ -346,11 +346,26 @@ mod tests {
         let defaults = list_skills(&dir).unwrap();
         assert!(defaults.len() >= 4);
 
-        let saved = save_skill(&dir, "/Modo Jogo!", "Modo Jogo", "Prepara PC", "Ajuste volume").unwrap();
+        let saved = save_skill(
+            &dir,
+            "/Modo Jogo!",
+            "Modo Jogo",
+            "Prepara PC",
+            "Ajuste volume",
+        )
+        .unwrap();
         assert_eq!(saved.slug, "modo-jogo");
         assert!(delete_skill(&dir, "modo-jogo").unwrap());
 
-        let r = create_routine(&dir, "Briefing", "daily", None, Some("09:30"), "Me dê o briefing").unwrap();
+        let r = create_routine(
+            &dir,
+            "Briefing",
+            "daily",
+            None,
+            Some("09:30"),
+            "Me dê o briefing",
+        )
+        .unwrap();
         assert_eq!(r.daily_hhmm.as_deref(), Some("09:30"));
         let toggled = toggle_routine(&dir, &r.id, false).unwrap();
         assert!(!toggled.enabled);

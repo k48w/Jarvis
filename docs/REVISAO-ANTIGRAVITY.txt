@@ -1,0 +1,210 @@
+REVISÃO TÉCNICA PARA CORREÇÃO — JARVIS CINEMATIC
+Data: 21/11/2026
+Commit revisado: 545c25b feat(companion): native Rust HTTP/SSE server, embedded mobile PWA, QR pairing in Settings, and live PC control
+
+OBJETIVO
+Corrigir os riscos funcionais e de segurança encontrados na implementação do Jarvis Companion mobile. Não fazer refatorações grandes antes de corrigir os itens P0/P1.
+
+REGRAS
+- Não remover funcionalidades existentes.
+- Não expor tokens, senhas ou conteúdo de tela em logs.
+- Manter compatibilidade com Windows/Tauri.
+- Criar testes para cada correção importante.
+- Ao terminar, executar npm run build e cargo test --manifest-path src-tauri/Cargo.toml em ambiente com Rust instalado.
+
+P0 — CORRIGIR ANTES DE USAR O COMPANION NA REDE
+
+1. APROVAÇÃO REMOTA NÃO ESTÁ CONECTADA
+Arquivos:
+- src-tauri/src/tools.rs, aproximadamente linha 1349
+- src-tauri/src/companion.rs, aproximadamente linha 730
+
+Problema:
+O backend emite o evento jarvis:tool-approval-request, mas o Companion escuta jarvis:tool-approval. Assim, uma aprovação enviada pelo celular pode não chegar ao fluxo que aguarda a decisão.
+
+Correção:
+- Unificar o nome do evento em todas as camadas.
+- Confirmar o fluxo completo: ferramenta perigosa -> evento SSE -> botão Aprovar/Negar -> resolução do canal pendente.
+- Adicionar teste que verifica aprovação e negação remotas.
+
+Critério de aceite:
+Uma aprovação feita no celular libera a ferramenta pendente em menos de 1 segundo; uma negação cancela a ferramenta; uma resposta duplicada não quebra o estado.
+
+2. NÃO USAR HTTP PURO PARA CONTROLE REMOTO SEM AVISO EXPLÍCITO
+Arquivos:
+- src-tauri/src/companion.rs, linhas 61-66 e 763-777
+- src-tauri/src/companion_ui.html, linhas 349-355 e 532
+
+Problema:
+O servidor faz bind em 0.0.0.0, usa http:// e envia o token na URL e também na query string do SSE. Um observador da rede local pode capturar o token e assumir o controle do Companion.
+
+Correção mínima obrigatória:
+- O Companion deve iniciar desligado ou limitado a 127.0.0.1.
+- A exposição para LAN deve exigir ativação explícita em Ajustes.
+- Remover token de URLs de API e do EventSource.
+- Usar um código de pareamento de uso único para trocar por uma sessão temporária.
+- Rotacionar e invalidar sessões ao regenerar o token.
+- Mostrar aviso claro de que o modo LAN controla tela, chat e ações do PC.
+
+Se HTTPS local não for implementado nesta etapa, documentar claramente a limitação e impedir ativação LAN por padrão.
+
+Critério de aceite:
+Com o Companion desativado, nenhuma API remota responde com dados. Com o modo LAN ativado, o pareamento é necessário, o token não aparece em URL/histórico/log e regenerar o token invalida a sessão anterior.
+
+3. SEGREDOS NÃO PODEM CAIR SILENCIOSAMENTE EM TEXTO PURO
+Arquivos:
+- src-tauri/src/config.rs, linhas 217-257
+- src-tauri/src/oauth.rs, linhas 118-133
+- src-tauri/src/google_oauth.rs, linhas 71-86
+
+Problema:
+Quando o Credential Manager/keyring falha, credenciais podem ser gravadas em secrets.json ou arquivos OAuth sem criptografia.
+
+Correção:
+- Preferencialmente falhar de forma segura para credenciais de alto risco quando o keyring não estiver disponível.
+- Alternativamente usar DPAPI no Windows e ACL restritiva vinculada ao usuário.
+- Informar o usuário de forma explícita quando estiver em modo de armazenamento alternativo.
+- Nunca imprimir secrets, access tokens ou refresh tokens nos logs.
+
+Critério de aceite:
+Um teste simula falha do keyring e confirma que nenhum segredo é persistido em texto puro sem consentimento explícito.
+
+P1 — CORRIGIR ANTES DO PRÓXIMO RELEASE
+
+4. CORRIDA NO CANCELAMENTO DO CHAT
+Arquivo: src-tauri/src/main.rs, aproximadamente linhas 455-467.
+
+Problema:
+Uma tarefa nova substitui active_cancel. Quando a tarefa anterior termina, ela pode limpar o canal pertencente à tarefa nova.
+
+Correção:
+Associar cada canal de cancelamento a um generation ID ou request ID. A tarefa só pode limpar active_cancel se ainda for dona daquele ID.
+
+Critério de aceite:
+Iniciar duas mensagens rapidamente e cancelar a segunda sempre cancela a segunda, nunca a primeira nem nenhuma tarefa futura.
+
+5. LIMITAR CONEXÕES E ADICIONAR TIMEOUTS
+Arquivo: src-tauri/src/companion.rs, leitura HTTP e loop accept.
+
+Problema:
+Cada conexão cria uma task; leitura de headers/corpo não tem timeout; SSE não tem limite de clientes.
+
+Correção:
+- Timeout para headers e corpo usando tokio::time::timeout.
+- Limite de tamanho de headers, já existente, deve ser acompanhado por timeout.
+- Semáforo/limite global para conexões e limite separado para SSE.
+- Retornar 429 quando o limite for atingido.
+- Garantir limpeza do contador quando o cliente desconectar.
+
+Critério de aceite:
+Conexões que enviam dados lentamente são encerradas; o servidor não cria tasks ilimitadas; clientes legítimos continuam funcionando.
+
+6. ESTADO DE APROVAÇÃO DO COMPANION DEVE SER ÚNICO
+Arquivos: src-tauri/src/companion.rs e src-tauri/src/main.rs.
+
+Problema:
+AppState.pending_approvals e CompanionState.pending_approval podem divergir após timeout, cancelamento ou aprovação local.
+
+Correção:
+Criar uma função única para publicar, resolver e limpar aprovações nos dois estados. Usá-la em aprovação local, aprovação remota, cancelamento e timeout.
+
+Critério de aceite:
+Depois de resolver ou cancelar uma aprovação, /api/status não exibe mais a aprovação pendente.
+
+7. PROTEGER CAPTURAS DE TELA CONCORRENTES
+Arquivos: src-tauri/src/companion.rs, aproximadamente linhas 466-504; src-tauri/src/tools.rs, aproximadamente linha 2387.
+
+Problema:
+Capturas simultâneas fazem set_jarvis_capture_exclusion(true/false) independentemente. Uma captura pode restaurar a janela enquanto outra ainda está usando a exclusão.
+
+Correção:
+Usar Mutex ou guard RAII compartilhado para proteger todo o ciclo: excluir -> capturar -> restaurar. Restaurar apenas quando a última captura terminar.
+
+Critério de aceite:
+Duas chamadas simultâneas de /api/screen não deixam a janela do Jarvis visível em uma captura intermediária.
+
+8. CORRIGIR FINAL DE GRAVAÇÃO DE ÁUDIO
+Arquivo: src-tauri/src/mic.rs, aproximadamente linha 395.
+
+Problema:
+stop_recording espera apenas 60 ms após sinalizar a thread, podendo extrair o buffer antes de a thread terminar.
+
+Correção:
+Usar JoinHandle, canal de conclusão ou outro protocolo determinístico. Não depender de sleep fixo.
+
+Critério de aceite:
+O áudio final não é truncado em gravações repetidas e rápidas.
+
+9. VALIDAR URLS CONTRA SSRF
+Arquivos: src-tauri/src/tools.rs, aproximadamente linhas 785-790; src-tauri/src/main.rs, aproximadamente linhas 921-939 e 998-1005.
+
+Problema:
+URLs http/https arbitrárias podem alcançar localhost, loopback, IPs privados, link-local ou serviços internos.
+
+Correção:
+- Bloquear loopback, localhost, RFC1918, link-local, multicast, IPv6 local e metadata endpoints.
+- Resolver DNS e validar o IP final.
+- Revalidar após redirects.
+- Não confiar apenas no texto do hostname.
+
+Critério de aceite:
+URLs públicas continuam funcionando; endpoints internos e redirects para redes privadas são recusados.
+
+P2 — QUALIDADE E MANUTENÇÃO
+
+10. INTEGRAR TESTES AO PROJETO
+- Adicionar script npm test ou documentar um comando equivalente único.
+- Integrar testes E2E existentes ao CI quando o ambiente suportar WebView2.
+- Adicionar teste de protocolo do Companion sem depender de tela real.
+- Adicionar cobertura para autenticação, eventos SSE, aprovação, cancelamento e limites HTTP.
+
+11. CI DEVE VALIDAR PULL REQUESTS
+Arquivo: .github/workflows/release.yml.
+
+Problema:
+O workflow é acionado apenas por workflow_dispatch.
+
+Correção:
+Criar workflow de CI em push/PR executando frontend build, cargo fmt --check, cargo clippy, cargo test e testes de protocolo.
+
+12. CORRIGIR VAZAMENTO DE LISTENERS NO FRONTEND
+Arquivos: src/main.tsx, aproximadamente linhas 1274 e 1581; src/BrowserView.tsx, aproximadamente linha 197.
+
+Problema:
+O cleanup pode ocorrer antes de o registro assíncrono do listener terminar. Nesse caso o listener é registrado depois e nunca removido.
+
+Correção:
+Usar flag disposed. No then do registro, remover imediatamente se o componente já tiver sido desmontado.
+
+13. CORRIGIR CORRIDA DA WAKE WORD
+Arquivo: src/main.tsx, aproximadamente linha 1214.
+
+Problema:
+Ativações/desativações rápidas podem terminar fora de ordem.
+
+Correção:
+Serializar chamadas ou usar generation ID para ignorar resultados obsoletos.
+
+14. MELHORAR ACESSIBILIDADE
+Arquivos: src/DiffView.tsx e src/RoutinesView.tsx.
+
+Adicionar aria-label em botões que exibem apenas ícone. Manter title como dica, mas não como único nome acessível.
+
+15. ATUALIZAR DOCUMENTAÇÃO
+Arquivos: README.md e docs/ARCHITECTURE.md.
+
+Documentar o Companion, endpoints, permissões, pareamento, modelo de ameaça, exposição LAN e ciclo de vida dos tokens. Diferenciar evidência histórica de uma verificação atual.
+
+VERIFICAÇÃO FINAL OBRIGATÓRIA
+- npm run build
+- cargo fmt --check
+- cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features
+- cargo test --manifest-path src-tauri/Cargo.toml
+- npm test, se o script for criado
+- teste de integração: pareamento -> SSE -> chat -> aprovação -> captura de tela -> rotação de token
+- confirmar que git diff não contém secrets ou tokens reais
+
+RESUMO DE PRIORIDADE
+P0: eventos de aprovação, autenticação/transporte do Companion e armazenamento de segredos.
+P1: cancelamento, limites HTTP, estado de aprovação, captura concorrente, áudio e SSRF.
+P2: testes/CI, listeners React, Wake Word, acessibilidade e documentação.

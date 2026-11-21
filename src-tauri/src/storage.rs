@@ -115,8 +115,14 @@ pub fn create_conversation(
         title: clean_title,
         created_at: now.clone(),
         updated_at: now,
-        project_id: project_id.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string),
-        project_path: project_path.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string),
+        project_id: project_id
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        project_path: project_path
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
         messages: Vec::new(),
     };
     save_conversation(data_dir, &conv)?;
@@ -206,8 +212,14 @@ pub fn set_conversation_project(
     project_path: Option<&str>,
 ) -> Result<Conversation, String> {
     let mut conv = get_conversation(data_dir, id)?;
-    conv.project_id = project_id.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
-    conv.project_path = project_path.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    conv.project_id = project_id
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    conv.project_path = project_path
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     conv.updated_at = Utc::now().to_rfc3339();
     save_conversation(data_dir, &conv)?;
     Ok(conv)
@@ -332,8 +344,8 @@ pub fn add_memory(data_dir: &Path, content: &str) -> Result<MemoryItem, String> 
         created_at: Utc::now().to_rfc3339(),
     };
     items.push(item.clone());
-    let bytes = serde_json::to_vec_pretty(&items)
-        .map_err(|e| format!("Falha ao salvar memória: {e}"))?;
+    let bytes =
+        serde_json::to_vec_pretty(&items).map_err(|e| format!("Falha ao salvar memória: {e}"))?;
     atomic_write(&memory_path(data_dir), &bytes)?;
     Ok(item)
 }
@@ -355,7 +367,8 @@ mod tests {
     use super::*;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("jarvis-storage-test-{name}-{}", Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("jarvis-storage-test-{name}-{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         dir
     }

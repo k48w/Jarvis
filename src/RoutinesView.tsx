@@ -145,6 +145,7 @@ export function RoutinesView({
                         className="mini-btn"
                         onClick={() => void onDeleteSkill(s.id)}
                         title="Excluir skill"
+                        aria-label={`Excluir skill ${s.name}`}
                       >
                         <Trash2 size={12} />
                       </button>
@@ -219,6 +220,7 @@ export function RoutinesView({
                         className="mini-btn"
                         onClick={() => onRunPrompt(r.prompt)}
                         title="Executar agora"
+                        aria-label={`Executar rotina ${r.name}`}
                       >
                         <Play size={12} />
                       </button>
@@ -234,6 +236,7 @@ export function RoutinesView({
                         className="mini-btn"
                         onClick={() => void onDeleteRoutine(r.id)}
                         title="Excluir rotina"
+                        aria-label={`Excluir rotina ${r.name}`}
                       >
                         <Trash2 size={12} />
                       </button>

@@ -203,7 +203,11 @@ export function BrowserView({
         void browserInspectLive(true).catch(() => {});
       }
     }).then((fn) => {
-      unlisten = fn;
+      if (!active) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
     });
 
     return () => {

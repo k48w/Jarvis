@@ -1609,24 +1609,30 @@ export function onRoutineTrigger(
 
 export interface CompanionInfo {
   enabled: boolean;
+  lanEnabled: boolean;
   port: number;
   ip: string;
-  url: string;
-  token: string;
+  bindHost: string;
+  pairUrl: string;
+  pairingCode: string;
   connectedClients: number;
 }
 
-let simCompanionEnabled = true;
-let simCompanionToken = "demo1234abcd5678ef901234567890ab";
+let simCompanionEnabled = false;
+let simCompanionLan = false;
+let simCompanionCode = "DEMO4821";
 
 export async function getCompanionInfo(): Promise<CompanionInfo> {
   if (isTauri) return invoke<CompanionInfo>("get_companion_info");
+  const ip = simCompanionEnabled && simCompanionLan ? "192.168.1.100" : "127.0.0.1";
   return {
     enabled: simCompanionEnabled,
+    lanEnabled: simCompanionLan,
     port: 47821,
-    ip: "192.168.1.100",
-    url: `http://192.168.1.100:47821/?token=${simCompanionToken}`,
-    token: simCompanionToken,
+    ip,
+    bindHost: simCompanionEnabled && simCompanionLan ? "0.0.0.0" : "127.0.0.1",
+    pairUrl: `http://${ip}:47821/?pair=${simCompanionCode}`,
+    pairingCode: simCompanionCode,
     connectedClients: 0,
   };
 }
@@ -1637,9 +1643,15 @@ export async function setCompanionEnabled(enabled: boolean): Promise<CompanionIn
   return getCompanionInfo();
 }
 
+export async function setCompanionLanEnabled(lanEnabled: boolean): Promise<CompanionInfo> {
+  if (isTauri) return invoke<CompanionInfo>("set_companion_lan_enabled", { lanEnabled });
+  simCompanionLan = lanEnabled;
+  return getCompanionInfo();
+}
+
 export async function regenerateCompanionToken(): Promise<CompanionInfo> {
   if (isTauri) return invoke<CompanionInfo>("regenerate_companion_token");
-  simCompanionToken = Math.random().toString(16).slice(2) + "abcd";
+  simCompanionCode = Math.random().toString(36).slice(2, 10).toUpperCase();
   return getCompanionInfo();
 }
 

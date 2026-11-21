@@ -650,7 +650,12 @@ pub fn find_spec(name: &str) -> Option<ToolSpec> {
 pub fn responses_tool_declarations(mode: PermissionMode, web_search_enabled: bool) -> Vec<Value> {
     tool_catalog()
         .into_iter()
-        .filter(|spec| !matches!(check_permission_policy(mode, spec.risk, spec.name, web_search_enabled), PermissionDecision::Deny(_)))
+        .filter(|spec| {
+            !matches!(
+                check_permission_policy(mode, spec.risk, spec.name, web_search_enabled),
+                PermissionDecision::Deny(_)
+            )
+        })
         .map(|spec| {
             json!({
                 "type": "function",
@@ -665,7 +670,12 @@ pub fn responses_tool_declarations(mode: PermissionMode, web_search_enabled: boo
 pub fn gemini_tool_declarations(mode: PermissionMode, web_search_enabled: bool) -> Vec<Value> {
     let decls: Vec<Value> = tool_catalog()
         .into_iter()
-        .filter(|spec| !matches!(check_permission_policy(mode, spec.risk, spec.name, web_search_enabled), PermissionDecision::Deny(_)))
+        .filter(|spec| {
+            !matches!(
+                check_permission_policy(mode, spec.risk, spec.name, web_search_enabled),
+                PermissionDecision::Deny(_)
+            )
+        })
         .map(|spec| {
             json!({
                 "name": spec.name,
@@ -722,7 +732,11 @@ pub fn format_args_summary(name: &str, args: &Value) -> String {
                 parts.push(format!("volume {l}%"));
             }
             if let Some(m) = args["muted"].as_bool() {
-                parts.push(if m { "silenciar".into() } else { "reativar som".into() });
+                parts.push(if m {
+                    "silenciar".into()
+                } else {
+                    "reativar som".into()
+                });
             }
             parts.join(", ")
         }
@@ -746,7 +760,12 @@ pub fn format_args_summary(name: &str, args: &Value) -> String {
                 "coordenada".to_string()
             }
         }
-        "browser_type" => args["text"].as_str().unwrap_or("").chars().take(40).collect(),
+        "browser_type" => args["text"]
+            .as_str()
+            .unwrap_or("")
+            .chars()
+            .take(40)
+            .collect(),
         "browser_scroll" => args["direction"].as_str().unwrap_or("down").to_string(),
         "browser_press_key" => args["key"].as_str().unwrap_or("").to_string(),
         "spawn_agent" => args["name"]
@@ -765,7 +784,12 @@ pub fn format_args_summary(name: &str, args: &Value) -> String {
             args["x"].as_i64().unwrap_or(0),
             args["y"].as_i64().unwrap_or(0)
         ),
-        "screen_type" => args["text"].as_str().unwrap_or("").chars().take(36).collect(),
+        "screen_type" => args["text"]
+            .as_str()
+            .unwrap_or("")
+            .chars()
+            .take(36)
+            .collect(),
         "screen_hotkey" => args["keys"].as_str().unwrap_or("").to_string(),
         "list_files" | "read_file" | "write_file" | "edit_file" => {
             args["path"].as_str().unwrap_or("").to_string()
@@ -776,8 +800,18 @@ pub fn format_args_summary(name: &str, args: &Value) -> String {
             args["path"].as_str().unwrap_or("")
         ),
         "git_status" | "git_diff" | "git_log" => args["path"].as_str().unwrap_or("").to_string(),
-        "git_commit" => args["message"].as_str().unwrap_or("").chars().take(48).collect(),
-        "run_terminal" => args["command"].as_str().unwrap_or("").chars().take(54).collect(),
+        "git_commit" => args["message"]
+            .as_str()
+            .unwrap_or("")
+            .chars()
+            .take(48)
+            .collect(),
+        "run_terminal" => args["command"]
+            .as_str()
+            .unwrap_or("")
+            .chars()
+            .take(54)
+            .collect(),
         _ => String::new(),
     }
 }
@@ -788,6 +822,123 @@ pub fn validate_http_url(raw: &str) -> Result<url::Url, String> {
         "http" | "https" => Ok(parsed),
         _ => Err("Apenas URLs http:// ou https:// são permitidas".to_string()),
     }
+}
+
+pub fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let o = v4.octets();
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_multicast()
+                || v4.is_broadcast()
+                || v4.is_unspecified()
+                // CGNAT 100.64.0.0/10
+                || (o[0] == 100 && (o[1] & 0b1100_0000) == 64)
+                // Documentation / Benchmark / Reserved
+                || (o[0] == 192 && o[1] == 0 && o[2] == 2)
+                || (o[0] == 198 && (o[1] == 18 || o[1] == 19))
+                || (o[0] == 198 && o[1] == 51 && o[2] == 100)
+                || (o[0] == 203 && o[1] == 0 && o[2] == 113)
+                || o[0] >= 240
+        }
+        std::net::IpAddr::V6(v6) => {
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return is_blocked_ip(std::net::IpAddr::V4(mapped));
+            }
+            let seg = v6.segments();
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                // Unique local fc00::/7
+                || (seg[0] & 0xfe00) == 0xfc00
+                // Link-local fe80::/10
+                || (seg[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+pub async fn validate_public_http_url(raw: &str) -> Result<url::Url, String> {
+    let parsed = validate_http_url(raw)?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "URL sem host válido".to_string())?;
+    let host_clean = host
+        .trim_matches(|c| c == '[' || c == ']')
+        .to_ascii_lowercase();
+
+    if host_clean == "localhost"
+        || host_clean.ends_with(".localhost")
+        || host_clean.ends_with(".local")
+        || host_clean.ends_with(".internal")
+        || host_clean == "metadata.google.internal"
+    {
+        return Err("Acesso a hosts internos/locais bloqueado (proteção SSRF).".to_string());
+    }
+
+    if let Ok(ip) = host_clean.parse::<std::net::IpAddr>() {
+        if is_blocked_ip(ip) {
+            return Err(
+                "Acesso a endereços IP privados/locais bloqueado (proteção SSRF).".to_string(),
+            );
+        }
+        return Ok(parsed);
+    }
+
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    let addrs = tokio::net::lookup_host((host_clean.as_str(), port))
+        .await
+        .map_err(|_| "Não foi possível resolver o host da URL.".to_string())?;
+    let resolved: Vec<std::net::SocketAddr> = addrs.collect();
+    if resolved.is_empty() {
+        return Err("Host sem endereços IP válidos.".to_string());
+    }
+    for addr in resolved {
+        if is_blocked_ip(addr.ip()) {
+            return Err(
+                "Host resolve para IP interno/privado bloqueado (proteção SSRF).".to_string(),
+            );
+        }
+    }
+    Ok(parsed)
+}
+
+pub async fn safe_fetch_url(
+    raw_url: &str,
+    user_agent: &str,
+    timeout: Duration,
+) -> Result<(url::Url, reqwest::Response), String> {
+    let client = reqwest::Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| format!("Falha ao preparar cliente HTTP seguro: {e}"))?;
+
+    let mut current = validate_public_http_url(raw_url).await?;
+    for _hop in 0..5 {
+        let resp = client
+            .get(current.as_str())
+            .header("User-Agent", user_agent)
+            .send()
+            .await
+            .map_err(|e| format!("Erro ao abrir página: {e}"))?;
+
+        if resp.status().is_redirection() {
+            let loc = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| "Redirecionamento HTTP sem destino.".to_string())?;
+            let next = current
+                .join(loc.trim())
+                .map_err(|_| "URL de redirecionamento inválida.".to_string())?;
+            current = validate_public_http_url(next.as_str()).await?;
+            continue;
+        }
+        return Ok((current, resp));
+    }
+    Err("Muitos redirecionamentos HTTP.".to_string())
 }
 
 pub fn is_dangerous_command(command: &str) -> Option<&'static str> {
@@ -818,8 +969,10 @@ pub fn is_dangerous_command(command: &str) -> Option<&'static str> {
 
     static RE_ROOT_DEL: OnceLock<Regex> = OnceLock::new();
     let re_root = RE_ROOT_DEL.get_or_init(|| {
-        Regex::new(r"(?i)(remove-item|rm|del|rmdir|rd)\b.*([a-z]:\\(\s|$|\*)|\\windows\\|\\system32\\)")
-            .expect("valid root delete regex")
+        Regex::new(
+            r"(?i)(remove-item|rm|del|rmdir|rd)\b.*([a-z]:\\(\s|$|\*)|\\windows\\|\\system32\\)",
+        )
+        .expect("valid root delete regex")
     });
     if re_root.is_match(&norm) {
         return Some("exclusão em raiz de unidade ou diretório protegido do Windows");
@@ -989,9 +1142,14 @@ fn read_windows_power_status() -> String {
 }
 
 #[cfg(windows)]
-pub(crate) fn set_windows_volume_blocking(level: Option<u8>, muted: Option<bool>) -> Result<String, String> {
+pub(crate) fn set_windows_volume_blocking(
+    level: Option<u8>,
+    muted: Option<bool>,
+) -> Result<String, String> {
     use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
-    use windows::Win32::Media::Audio::{eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator};
+    use windows::Win32::Media::Audio::{
+        eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator,
+    };
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
     };
@@ -1034,16 +1192,18 @@ pub(crate) fn set_windows_volume_blocking(level: Option<u8>, muted: Option<bool>
 }
 
 #[cfg(not(windows))]
-pub(crate) fn set_windows_volume_blocking(_level: Option<u8>, _muted: Option<bool>) -> Result<String, String> {
+pub(crate) fn set_windows_volume_blocking(
+    _level: Option<u8>,
+    _muted: Option<bool>,
+) -> Result<String, String> {
     Err("Controle de volume disponível apenas no Windows".to_string())
 }
 
 #[cfg(windows)]
 pub(crate) fn send_media_key(action: &str) -> Result<String, String> {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
-        KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_MEDIA_NEXT_TRACK, VK_MEDIA_PLAY_PAUSE,
-        VK_MEDIA_PREV_TRACK, VK_MEDIA_STOP,
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
+        VIRTUAL_KEY, VK_MEDIA_NEXT_TRACK, VK_MEDIA_PLAY_PAUSE, VK_MEDIA_PREV_TRACK, VK_MEDIA_STOP,
     };
 
     let (vk, label): (VIRTUAL_KEY, &str) = match action {
@@ -1187,19 +1347,13 @@ async fn run_web_search(state: &AppState, query: &str) -> Result<String, String>
     Ok(formatted.join("\n\n"))
 }
 
-async fn run_fetch_webpage(state: &AppState, raw_url: &str) -> Result<String, String> {
-    let parsed = validate_http_url(raw_url)?;
-    let resp = state
-        .http
-        .get(parsed)
-        .timeout(Duration::from_secs(12))
-        .header(
-            "User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        )
-        .send()
-        .await
-        .map_err(|e| format!("Erro ao abrir página: {e}"))?;
+async fn run_fetch_webpage(_state: &AppState, raw_url: &str) -> Result<String, String> {
+    let (_final_url, resp) = safe_fetch_url(
+        raw_url,
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        Duration::from_secs(12),
+    )
+    .await?;
     if !resp.status().is_success() {
         return Err(format!("Página retornou HTTP {}", resp.status()));
     }
@@ -1333,11 +1487,6 @@ async fn wait_for_user_approval(
 ) -> bool {
     let approval_id = Uuid::new_v4().to_string();
     let (tx, rx) = oneshot::channel::<bool>();
-    {
-        let mut map = state.pending_approvals.lock().await;
-        map.insert(approval_id.clone(), tx);
-    }
-
     let req = ToolApprovalRequest {
         approval_id: approval_id.clone(),
         conversation_id: conversation_id.to_string(),
@@ -1346,17 +1495,24 @@ async fn wait_for_user_approval(
         description: spec.description.to_string(),
         args_summary: args_summary.to_string(),
     };
+    let req_val = serde_json::to_value(&req).unwrap_or_default();
+    state
+        .register_approval(approval_id.clone(), req_val, tx)
+        .await;
     let _ = app.emit("jarvis:tool-approval-request", req);
 
-    let approved = match tokio::time::timeout(Duration::from_secs(120), rx).await {
+    match tokio::time::timeout(Duration::from_secs(120), rx).await {
         Ok(Ok(val)) => val,
         _ => {
-            let mut map = state.pending_approvals.lock().await;
-            map.remove(&approval_id);
+            if state.clear_approval(&approval_id).await {
+                let _ = app.emit(
+                    "jarvis:approval-resolved",
+                    json!({ "approvalId": approval_id, "approved": false, "reason": "timeout" }),
+                );
+            }
             false
         }
-    };
-    approved
+    }
 }
 
 pub async fn execute_tool_with_policy(
@@ -1491,7 +1647,7 @@ pub async fn execute_tool_with_policy(
         }
         "open_url" => {
             let raw_url = args["url"].as_str().unwrap_or("");
-            match validate_http_url(raw_url) {
+            match validate_public_http_url(raw_url).await {
                 Ok(parsed) => open::that(parsed.as_str())
                     .map(|_| format!("Site aberto no navegador: {}", parsed))
                     .map_err(|e| format!("Não foi possível abrir o navegador: {e}")),
@@ -1553,10 +1709,7 @@ pub async fn execute_tool_with_policy(
                     run_web_search(state, url).await
                 }
             } else {
-                let _ = app.emit(
-                    "jarvis:browser-panel",
-                    json!({ "open": true, "url": url }),
-                );
+                let _ = app.emit("jarvis:browser-panel", json!({ "open": true, "url": url }));
                 tokio::time::sleep(Duration::from_millis(220)).await;
                 match browser::navigate(app, url).await {
                     Ok(info) => {
@@ -1603,7 +1756,15 @@ pub async fn execute_tool_with_policy(
                 let target_label = args["target_label"].as_str();
                 let clear_first = args["clear_first"].as_bool().unwrap_or(true);
                 let press_enter = args["press_enter"].as_bool().unwrap_or(false);
-                browser::type_text(app, text, element_id, target_label, clear_first, press_enter).await
+                browser::type_text(
+                    app,
+                    text,
+                    element_id,
+                    target_label,
+                    clear_first,
+                    press_enter,
+                )
+                .await
             }
         }
         "browser_scroll" => {
@@ -1640,7 +1801,10 @@ pub async fn execute_tool_with_policy(
         }
         "spawn_agent" => {
             if conversation_id.starts_with("agent:") {
-                Ok("Subagente não pode criar outros subagentes; conclua a tarefa diretamente.".to_string())
+                Ok(
+                    "Subagente não pode criar outros subagentes; conclua a tarefa diretamente."
+                        .to_string(),
+                )
             } else {
                 let role = args["role"].as_str().unwrap_or("research");
                 let agent_name = args["name"].as_str();
@@ -1695,32 +1859,30 @@ pub async fn execute_tool_with_policy(
                 ))
             }
         }
-        "list_open_windows" => {
-            tokio::task::spawn_blocking(|| {
-                let wins = list_open_windows_info_blocking();
-                if wins.is_empty() {
-                    Ok("Nenhuma janela aberta detectada.".to_string())
-                } else {
-                    let lines: Vec<String> = wins
-                        .into_iter()
-                        .map(|w| {
-                            format!(
-                                "- [{}] {} ({}, {}x{})",
-                                w.process_name,
-                                w.title,
-                                if w.minimized { "minimizada" } else { "aberta" },
-                                w.width,
-                                w.height
-                            )
-                        })
-                        .collect();
-                    Ok(format!("Janelas abertas no Windows:\n{}", lines.join("\n")))
-                }
-            })
-            .await
-            .map_err(|e| format!("Falha ao listar janelas: {e}"))
-            .and_then(|r| r)
-        }
+        "list_open_windows" => tokio::task::spawn_blocking(|| {
+            let wins = list_open_windows_info_blocking();
+            if wins.is_empty() {
+                Ok("Nenhuma janela aberta detectada.".to_string())
+            } else {
+                let lines: Vec<String> = wins
+                    .into_iter()
+                    .map(|w| {
+                        format!(
+                            "- [{}] {} ({}, {}x{})",
+                            w.process_name,
+                            w.title,
+                            if w.minimized { "minimizada" } else { "aberta" },
+                            w.width,
+                            w.height
+                        )
+                    })
+                    .collect();
+                Ok(format!("Janelas abertas no Windows:\n{}", lines.join("\n")))
+            }
+        })
+        .await
+        .map_err(|e| format!("Falha ao listar janelas: {e}"))
+        .and_then(|r| r),
         "see_screen" => {
             let _ = app.emit("jarvis:screen-pulse", json!({ "kind": "capture" }));
             let target_window = args["target_window"]
@@ -1729,11 +1891,8 @@ pub async fn execute_tool_with_policy(
                 .filter(|s| !s.is_empty())
                 .map(str::to_string);
 
-            // Exclude J.A.R.V.I.S. windows from capture so it sees right through itself!
-            let excluded_handles = set_jarvis_capture_exclusion(app, true);
-            if !excluded_handles.is_empty() {
-                tokio::time::sleep(Duration::from_millis(85)).await;
-            }
+            // Serialized RAII guard guarantees concurrent captures never expose J.A.R.V.I.S.
+            let _capture_guard = acquire_screen_capture_guard(app).await;
 
             let target_clone = target_window.clone();
             let cap_res = tokio::task::spawn_blocking(move || {
@@ -1750,7 +1909,7 @@ pub async fn execute_tool_with_policy(
             .await
             .map_err(|e| format!("Falha ao capturar tela: {e}"))
             .and_then(|r| r);
-            let _ = set_jarvis_capture_exclusion(app, false);
+            drop(_capture_guard);
 
             match cap_res {
                 Ok(((cap_w, cap_h, real_w, real_h, b64), open_wins, targeted)) => {
@@ -1787,12 +1946,10 @@ pub async fn execute_tool_with_policy(
             let y = args["y"].as_i64().unwrap_or(0) as i32;
             let button = args["button"].as_str().unwrap_or("left").to_string();
             let double_click = args["double_click"].as_bool().unwrap_or(false);
-            tokio::task::spawn_blocking(move || {
-                screen_click_blocking(x, y, &button, double_click)
-            })
-            .await
-            .map_err(|e| format!("Falha ao clicar na tela: {e}"))
-            .and_then(|r| r)
+            tokio::task::spawn_blocking(move || screen_click_blocking(x, y, &button, double_click))
+                .await
+                .map_err(|e| format!("Falha ao clicar na tela: {e}"))
+                .and_then(|r| r)
         }
         "screen_type" => {
             let _ = app.emit("jarvis:screen-pulse", json!({ "kind": "action" }));
@@ -1850,7 +2007,15 @@ pub async fn execute_tool_with_policy(
 
             match outcome {
                 Ok((msg, resolved, existed, prev_text, next_text)) => {
-                    emit_file_diff(app, conversation_id, &resolved, "write_file", existed, &prev_text, &next_text);
+                    emit_file_diff(
+                        app,
+                        conversation_id,
+                        &resolved,
+                        "write_file",
+                        existed,
+                        &prev_text,
+                        &next_text,
+                    );
                     Ok(msg)
                 }
                 Err(e) => Err(e),
@@ -1874,7 +2039,15 @@ pub async fn execute_tool_with_policy(
 
             match outcome {
                 Ok((msg, resolved, prev_text, next_text)) => {
-                    emit_file_diff(app, conversation_id, &resolved, "edit_file", true, &prev_text, &next_text);
+                    emit_file_diff(
+                        app,
+                        conversation_id,
+                        &resolved,
+                        "edit_file",
+                        true,
+                        &prev_text,
+                        &next_text,
+                    );
                     Ok(msg)
                 }
                 Err(e) => Err(e),
@@ -2035,7 +2208,10 @@ pub async fn execute_tool_with_policy(
                             format!("a cada {} min", r.interval_minutes.unwrap_or(60))
                         };
                         let st = if r.enabled { "ativa" } else { "pausada" };
-                        format!("- [{}] {} ({sched}, id: {}): {}", st, r.name, r.id, r.prompt)
+                        format!(
+                            "- [{}] {} ({sched}, id: {}): {}",
+                            st, r.name, r.id, r.prompt
+                        )
                     })
                     .collect::<Vec<_>>()
                     .join("\n")
@@ -2056,7 +2232,13 @@ pub async fn execute_tool_with_policy(
 
     let (status, output, summary) = match res {
         Ok(out) => {
-            let short: String = out.lines().next().unwrap_or(&out).chars().take(90).collect();
+            let short: String = out
+                .lines()
+                .next()
+                .unwrap_or(&out)
+                .chars()
+                .take(90)
+                .collect();
             ("done".to_string(), out, short)
         }
         Err(err) => {
@@ -2166,8 +2348,12 @@ fn capture_via_dxgi() -> Result<(u32, u32, u32, u32, String), String> {
         let device = device_opt.ok_or("Dispositivo D3D11 nulo")?;
         let ctx = ctx_opt.ok_or("Contexto D3D11 nulo")?;
         let dxgi_dev: IDXGIDevice = device.cast().map_err(|e| format!("IDXGIDevice: {e}"))?;
-        let adapter = dxgi_dev.GetAdapter().map_err(|e| format!("GetAdapter: {e}"))?;
-        let output = adapter.EnumOutputs(0).map_err(|e| format!("EnumOutputs: {e}"))?;
+        let adapter = dxgi_dev
+            .GetAdapter()
+            .map_err(|e| format!("GetAdapter: {e}"))?;
+        let output = adapter
+            .EnumOutputs(0)
+            .map_err(|e| format!("EnumOutputs: {e}"))?;
         let output1: IDXGIOutput1 = output.cast().map_err(|e| format!("IDXGIOutput1: {e}"))?;
         let dupl = output1
             .DuplicateOutput(&device)
@@ -2195,7 +2381,8 @@ fn capture_via_dxgi() -> Result<(u32, u32, u32, u32, String), String> {
         }
 
         let res = res_opt.ok_or("DXGI retornou recurso vazio")?;
-        let desktop_tex: ID3D11Texture2D = res.cast().map_err(|e| format!("ID3D11Texture2D: {e}"))?;
+        let desktop_tex: ID3D11Texture2D =
+            res.cast().map_err(|e| format!("ID3D11Texture2D: {e}"))?;
         let mut desc = D3D11_TEXTURE2D_DESC::default();
         desktop_tex.GetDesc(&mut desc);
 
@@ -2311,17 +2498,7 @@ fn capture_via_gdi() -> Result<(u32, u32, u32, u32, String), String> {
             SRCCOPY | CAPTUREBLT,
         );
         if blt_ok.is_err() {
-            blt_ok = BitBlt(
-                mem_dc,
-                0,
-                0,
-                real_w,
-                real_h,
-                Some(screen_dc),
-                0,
-                0,
-                SRCCOPY,
-            );
+            blt_ok = BitBlt(mem_dc, 0, 0, real_w, real_h, Some(screen_dc), 0, 0, SRCCOPY);
         }
 
         let _ = SelectObject(mem_dc, prev);
@@ -2374,13 +2551,40 @@ pub fn capture_desktop_screen_blocking() -> Result<(u32, u32, u32, u32, String),
     {
         match capture_via_dxgi() {
             Ok(shot) => Ok(shot),
-            Err(dxgi_err) => capture_via_gdi()
-                .map_err(|gdi_err| format!("DXGI ({dxgi_err}) · GDI ({gdi_err})")),
+            Err(dxgi_err) => {
+                capture_via_gdi().map_err(|gdi_err| format!("DXGI ({dxgi_err}) · GDI ({gdi_err})"))
+            }
         }
     }
     #[cfg(not(windows))]
     {
         Err("Captura de tela disponível apenas no Windows.".to_string())
+    }
+}
+
+static SCREEN_CAPTURE_MUTEX: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+pub(crate) struct ScreenCaptureGuard {
+    app: AppHandle,
+    _lock: tokio::sync::MutexGuard<'static, ()>,
+}
+
+impl Drop for ScreenCaptureGuard {
+    fn drop(&mut self) {
+        let _ = set_jarvis_capture_exclusion(&self.app, false);
+    }
+}
+
+pub(crate) async fn acquire_screen_capture_guard(app: &AppHandle) -> ScreenCaptureGuard {
+    let mtx = SCREEN_CAPTURE_MUTEX.get_or_init(|| tokio::sync::Mutex::new(()));
+    let lock = mtx.lock().await;
+    let excluded = set_jarvis_capture_exclusion(app, true);
+    if !excluded.is_empty() {
+        tokio::time::sleep(Duration::from_millis(85)).await;
+    }
+    ScreenCaptureGuard {
+        app: app.clone(),
+        _lock: lock,
     }
 }
 
@@ -2676,7 +2880,9 @@ fn match_target_window<'a>(query: &str, wins: &'a [OpenWindowInfo]) -> Option<&'
         || q.contains("emulador")
         || q.contains("emulator");
 
-    let stop_words = ["o", "a", "os", "as", "meu", "minha", "janela", "tela", "app", "do", "da", "de", "no", "na"];
+    let stop_words = [
+        "o", "a", "os", "as", "meu", "minha", "janela", "tela", "app", "do", "da", "de", "no", "na",
+    ];
     let tokens: Vec<&str> = q
         .split(|c: char| !c.is_alphanumeric())
         .filter(|t| t.len() >= 2 && !stop_words.contains(t))
@@ -2713,7 +2919,11 @@ fn match_target_window<'a>(query: &str, wins: &'a [OpenWindowInfo]) -> Option<&'
             }
         }
 
-        if wants_browser && BROWSERS.iter().any(|b| stem.contains(b) || title_lower.contains(b)) {
+        if wants_browser
+            && BROWSERS
+                .iter()
+                .any(|b| stem.contains(b) || title_lower.contains(b))
+        {
             score += 85;
         }
         if wants_editor
@@ -2729,7 +2939,9 @@ fn match_target_window<'a>(query: &str, wins: &'a [OpenWindowInfo]) -> Option<&'
             if is_known_game {
                 score += 115;
             } else {
-                let is_non_game = NON_GAMES.iter().any(|ng| stem == *ng || stem.starts_with(ng));
+                let is_non_game = NON_GAMES
+                    .iter()
+                    .any(|ng| stem == *ng || stem.starts_with(ng));
                 if !is_non_game && (win.minimized || (win.width >= 500 && win.height >= 350)) {
                     score += 55;
                 }
@@ -2763,13 +2975,14 @@ fn capture_window_printwindow(hwnd_raw: isize) -> Result<(u32, u32, u32, u32, St
 
     let hwnd = HWND(hwnd_raw as *mut std::ffi::c_void);
     let mut rect = RECT::default();
-    unsafe { GetWindowRect(hwnd, &mut rect) }
-        .map_err(|e| format!("GetWindowRect falhou: {e}"))?;
+    unsafe { GetWindowRect(hwnd, &mut rect) }.map_err(|e| format!("GetWindowRect falhou: {e}"))?;
 
     let width = rect.right - rect.left;
     let height = rect.bottom - rect.top;
     if width < 32 || height < 32 {
-        return Err(format!("Janela com dimensões muito pequenas ({width}x{height})."));
+        return Err(format!(
+            "Janela com dimensões muito pequenas ({width}x{height})."
+        ));
     }
 
     unsafe {
@@ -3099,7 +3312,11 @@ fn screen_type_blocking(text: &str, press_enter: bool) -> Result<String, String>
 
         Ok(format!(
             "Texto digitado na janela em foco{}.",
-            if press_enter { " e Enter pressionado" } else { "" }
+            if press_enter {
+                " e Enter pressionado"
+            } else {
+                ""
+            }
         ))
     }
     #[cfg(not(windows))]
@@ -3220,7 +3437,10 @@ fn resolve_user_path(raw: &str) -> Result<std::path::PathBuf, String> {
     if trimmed == "~" {
         return Ok(std::path::PathBuf::from(home));
     }
-    if let Some(rest) = trimmed.strip_prefix("~/").or_else(|| trimmed.strip_prefix("~\\")) {
+    if let Some(rest) = trimmed
+        .strip_prefix("~/")
+        .or_else(|| trimmed.strip_prefix("~\\"))
+    {
         return Ok(std::path::PathBuf::from(home).join(rest));
     }
     if lower == "desktop" || lower == "área de trabalho" || lower == "area de trabalho" {
@@ -3257,7 +3477,9 @@ fn resolve_user_path(raw: &str) -> Result<std::path::PathBuf, String> {
         return Ok(std::path::PathBuf::from(home).join("Downloads").join(rest));
     }
 
-    let expanded = trimmed.replace("%USERPROFILE%", &home).replace("%userprofile%", &home);
+    let expanded = trimmed
+        .replace("%USERPROFILE%", &home)
+        .replace("%userprofile%", &home);
     Ok(std::path::PathBuf::from(expanded))
 }
 
@@ -3340,8 +3562,12 @@ fn tool_read_file(
     if meta.len() > 2_500_000 {
         return Err("Arquivo muito grande (> 2.5 MB) para leitura direta completa.".to_string());
     }
-    let raw = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Não foi possível ler '{}' como texto UTF-8: {e}", path.display()))?;
+    let raw = std::fs::read_to_string(&path).map_err(|e| {
+        format!(
+            "Não foi possível ler '{}' como texto UTF-8: {e}",
+            path.display()
+        )
+    })?;
 
     let lines: Vec<&str> = raw.lines().collect();
     let total = lines.len();
@@ -3482,7 +3708,9 @@ fn tool_search_files(
         if hits.len() >= max_results || scanned > 2500 {
             break;
         }
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             if hits.len() >= max_results || scanned > 2500 {
                 break;
@@ -3514,7 +3742,9 @@ fn tool_search_files(
                 continue;
             }
             scanned += 1;
-            let Ok(text) = std::fs::read_to_string(&p) else { continue };
+            let Ok(text) = std::fs::read_to_string(&p) else {
+                continue;
+            };
             for (i, line) in text.lines().enumerate() {
                 if line.to_ascii_lowercase().contains(&q_lower) {
                     let rel = p.strip_prefix(&root).unwrap_or(&p);
@@ -3631,7 +3861,8 @@ fn dib_bytes_to_bgra(dib: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     let compression = u32::from_le_bytes([dib[16], dib[17], dib[18], dib[19]]);
     let clr_used = u32::from_le_bytes([dib[32], dib[33], dib[34], dib[35]]) as usize;
 
-    if width_i32 <= 0 || height_i32 == 0 || width_i32 > 16_384 || height_i32.unsigned_abs() > 16_384 {
+    if width_i32 <= 0 || height_i32 == 0 || width_i32 > 16_384 || height_i32.unsigned_abs() > 16_384
+    {
         return Err("Dimensões inválidas na imagem da área de transferência.".to_string());
     }
     if bpp != 24 && bpp != 32 {
@@ -3643,7 +3874,11 @@ fn dib_bytes_to_bgra(dib: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     let top_down = height_i32 < 0;
 
     // BI_BITFIELDS (3) adds 12 bytes of channel masks right after a 40-byte BITMAPINFOHEADER
-    let extra_masks = if header_size == 40 && compression == 3 { 12 } else { 0 };
+    let extra_masks = if header_size == 40 && compression == 3 {
+        12
+    } else {
+        0
+    };
     let palette_bytes = clr_used * 4;
     let pixel_offset = header_size + extra_masks + palette_bytes;
     let src_stride = (((width as usize) * (bpp as usize) + 31) / 32) * 4;
@@ -3654,8 +3889,13 @@ fn dib_bytes_to_bgra(dib: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
 
     let mut bgra = vec![0u8; (width as usize) * (height as usize) * 4];
     for y in 0..(height as usize) {
-        let src_y = if top_down { y } else { (height as usize) - 1 - y };
-        let src_row = &dib[pixel_offset + src_y * src_stride..pixel_offset + (src_y + 1) * src_stride];
+        let src_y = if top_down {
+            y
+        } else {
+            (height as usize) - 1 - y
+        };
+        let src_row =
+            &dib[pixel_offset + src_y * src_stride..pixel_offset + (src_y + 1) * src_stride];
         let dst_row = &mut bgra[y * (width as usize) * 4..(y + 1) * (width as usize) * 4];
         if bpp == 32 {
             for x in 0..(width as usize) {
@@ -3700,7 +3940,9 @@ pub fn read_clipboard_blocking() -> Result<ClipboardContent, String> {
                 std::thread::sleep(Duration::from_millis(25));
             }
             if !opened {
-                return Err("Não foi possível abrir a área de transferência do Windows.".to_string());
+                return Err(
+                    "Não foi possível abrir a área de transferência do Windows.".to_string()
+                );
             }
 
             let result = (|| -> Result<ClipboardContent, String> {
@@ -3903,7 +4145,9 @@ pub fn tool_git_diff(raw_path: &str, file: Option<&str>, staged: bool) -> Result
     }
     let preview: String = text.chars().take(12_000).collect();
     if text.chars().count() > 12_000 {
-        Ok(format!("{preview}\n... (diff truncado em 12.000 caracteres)"))
+        Ok(format!(
+            "{preview}\n... (diff truncado em 12.000 caracteres)"
+        ))
     } else {
         Ok(preview)
     }
@@ -3942,7 +4186,10 @@ pub fn git_commit_blocking(raw_path: &str, message: &str) -> Result<String, Stri
     }
     let st = git_repo_status_blocking(raw_path)?;
     if !st.is_git_repo {
-        return Err(format!("A pasta '{}' não é um repositório Git.", dir.display()));
+        return Err(format!(
+            "A pasta '{}' não é um repositório Git.",
+            dir.display()
+        ));
     }
     if st.changes.is_empty() {
         return Err("Não há alterações pendentes para commitar.".to_string());
@@ -3981,11 +4228,21 @@ mod tests {
             PermissionDecision::Allow
         );
         assert_eq!(
-            check_permission_policy(PermissionMode::Review, ToolRisk::Read, "get_system_status", true),
+            check_permission_policy(
+                PermissionMode::Review,
+                ToolRisk::Read,
+                "get_system_status",
+                true
+            ),
             PermissionDecision::Allow
         );
         assert_eq!(
-            check_permission_policy(PermissionMode::Review, ToolRisk::Action, "run_command", true),
+            check_permission_policy(
+                PermissionMode::Review,
+                ToolRisk::Action,
+                "run_command",
+                true
+            ),
             PermissionDecision::NeedApproval
         );
         assert!(matches!(
@@ -3993,7 +4250,12 @@ mod tests {
             PermissionDecision::Deny(_)
         ));
         assert!(matches!(
-            check_permission_policy(PermissionMode::Safe, ToolRisk::Read, "get_system_status", true),
+            check_permission_policy(
+                PermissionMode::Safe,
+                ToolRisk::Read,
+                "get_system_status",
+                true
+            ),
             PermissionDecision::Deny(_)
         ));
         assert!(matches!(
@@ -4071,7 +4333,10 @@ mod tests {
         let listed = tool_list_files(&dir_str, 20).unwrap();
         assert!(listed.contains("demo.txt"));
 
-        assert!(is_protected_write_path(std::path::Path::new(r"C:\Windows\System32\test.txt")).is_some());
+        assert!(
+            is_protected_write_path(std::path::Path::new(r"C:\Windows\System32\test.txt"))
+                .is_some()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -4097,7 +4362,9 @@ mod tests {
             let (cw, ch, rw, rh, b64) =
                 encode_bgra_to_jpeg_base64(&bgra, w, h, (w * 4) as usize).unwrap();
             assert_eq!((cw, ch, rw, rh), (1280, 720, 1920, 1080));
-            let bytes = base64::engine::general_purpose::STANDARD.decode(&b64).unwrap();
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(&b64)
+                .unwrap();
             assert_eq!(&bytes[..3], &[0xFF, 0xD8, 0xFF]);
 
             // On an interactive unlocked desktop, also verify live DXGI/GDI capture
@@ -4183,7 +4450,7 @@ mod tests {
         dib[8..12].copy_from_slice(&2i32.to_le_bytes()); // height = 2 (bottom-up)
         dib[12..14].copy_from_slice(&1u16.to_le_bytes()); // planes = 1
         dib[14..16].copy_from_slice(&24u16.to_le_bytes()); // 24 bpp
-        // Bottom row (y=1 in top-down) -> blue pixel
+                                                           // Bottom row (y=1 in top-down) -> blue pixel
         dib[40..43].copy_from_slice(&[255, 10, 20]);
         // Top row (y=0 in top-down) -> red pixel
         dib[48..51].copy_from_slice(&[5, 15, 250]);
@@ -4206,5 +4473,29 @@ mod tests {
         revert_file_change_blocking(&f1_str, false, "").unwrap();
         assert!(!f1.exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn ssrf_validation_blocks_private_and_loopback_addresses() {
+        assert!(validate_public_http_url("http://127.0.0.1:47821/")
+            .await
+            .is_err());
+        assert!(validate_public_http_url("http://localhost:8080/api")
+            .await
+            .is_err());
+        assert!(
+            validate_public_http_url("http://169.254.169.254/latest/meta-data/")
+                .await
+                .is_err()
+        );
+        assert!(validate_public_http_url("http://192.168.1.1/admin")
+            .await
+            .is_err());
+        assert!(validate_public_http_url("http://10.0.0.1/").await.is_err());
+        assert!(validate_public_http_url("http://[::1]:3000/")
+            .await
+            .is_err());
+        assert!(is_blocked_ip("::ffff:127.0.0.1".parse().unwrap()));
+        assert!(!is_blocked_ip("1.1.1.1".parse().unwrap()));
     }
 }

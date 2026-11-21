@@ -31,6 +31,7 @@ import {
   onMicTestLevel,
   regenerateCompanionToken,
   setCompanionEnabled,
+  setCompanionLanEnabled,
   startNativeMicTest,
   stopNativeMicTest,
   type AllKeyStatus,
@@ -624,11 +625,14 @@ export function SettingsDrawer({
         .then(async (info) => {
           if (!active) return;
           setCompanionInfo(info);
-          const dataUrl = await QRCode.toDataURL(info.url, {
-            width: 210,
-            margin: 2,
-            color: { dark: "#050811", light: "#ffffff" },
-          }).catch(() => "");
+          const dataUrl =
+            info.enabled && info.lanEnabled
+              ? await QRCode.toDataURL(info.pairUrl, {
+                  width: 210,
+                  margin: 2,
+                  color: { dark: "#050811", light: "#ffffff" },
+                }).catch(() => "")
+              : "";
           if (active) setCompanionQr(dataUrl);
         })
         .catch(() => {});
@@ -1687,7 +1691,7 @@ export function SettingsDrawer({
             <label className="check-row">
               <input
                 type="checkbox"
-                checked={companionInfo?.enabled ?? true}
+                checked={companionInfo?.enabled ?? false}
                 disabled={companionBusy}
                 onChange={async (e) => {
                   setCompanionBusy(true);
@@ -1695,16 +1699,61 @@ export function SettingsDrawer({
                   try {
                     const next = await setCompanionEnabled(e.target.checked);
                     setCompanionInfo(next);
+                    if (next.enabled && next.lanEnabled) {
+                      const qr = await QRCode.toDataURL(next.pairUrl, {
+                        width: 210,
+                        margin: 2,
+                        color: { dark: "#050811", light: "#ffffff" },
+                      }).catch(() => "");
+                      setCompanionQr(qr);
+                    } else {
+                      setCompanionQr("");
+                    }
                   } finally {
                     setCompanionBusy(false);
                   }
                 }}
               />
-              <span>Conectar Celular na Rede Local (QR Code)</span>
+              <span>Ativar Jarvis Companion (servidor local)</span>
             </label>
 
-            {companionInfo && (
+            {companionInfo && companionInfo.enabled && (
               <>
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={companionInfo.lanEnabled}
+                    disabled={companionBusy}
+                    onChange={async (e) => {
+                      setCompanionBusy(true);
+                      setCompanionMsg(null);
+                      try {
+                        const next = await setCompanionLanEnabled(e.target.checked);
+                        setCompanionInfo(next);
+                        if (next.lanEnabled) {
+                          const qr = await QRCode.toDataURL(next.pairUrl, {
+                            width: 210,
+                            margin: 2,
+                            color: { dark: "#050811", light: "#ffffff" },
+                          }).catch(() => "");
+                          setCompanionQr(qr);
+                        } else {
+                          setCompanionQr("");
+                        }
+                      } finally {
+                        setCompanionBusy(false);
+                      }
+                    }}
+                  />
+                  <span>Expor na rede Wi-Fi (Modo LAN para celular)</span>
+                </label>
+
+                <div className="companion-lan-warning" role="alert">
+                  <strong>Aviso de rede:</strong> O acesso pela rede local usa HTTP sem TLS
+                  e permite que dispositivos pareados controlem chat, aprovações e capturas de tela do PC.
+                  Ative o modo LAN apenas em redes Wi-Fi privadas confiáveis.
+                </div>
+
                 <div className="companion-status-row">
                   <span
                     className={
@@ -1716,11 +1765,14 @@ export function SettingsDrawer({
                     <Smartphone size={13} />
                     {companionInfo.connectedClients > 0
                       ? `${companionInfo.connectedClients} celular(es) conectado(s)`
-                      : `Aguardando conexão · Porta ${companionInfo.port}`}
+                      : `Bind ${companionInfo.bindHost}:${companionInfo.port}`}
+                  </span>
+                  <span className="companion-code-pill" title="Código de pareamento de uso único">
+                    Código: <strong>{companionInfo.pairingCode}</strong>
                   </span>
                 </div>
 
-                {companionInfo.enabled && companionQr && (
+                {companionInfo.lanEnabled && companionQr && (
                   <div className="companion-qr-card">
                     <img src={companionQr} alt="QR Code Jarvis Companion" />
                   </div>
@@ -1730,14 +1782,14 @@ export function SettingsDrawer({
                   <input
                     type="text"
                     readOnly
-                    value={companionInfo.url}
-                    aria-label="URL de pareamento"
+                    value={companionInfo.pairUrl}
+                    aria-label="URL de pareamento único"
                   />
                   <button
                     type="button"
                     className="mini-btn"
                     onClick={async () => {
-                      await navigator.clipboard.writeText(companionInfo.url);
+                      await navigator.clipboard.writeText(companionInfo.pairUrl);
                       setCopiedMobileUrl(true);
                       setTimeout(() => setCopiedMobileUrl(false), 1600);
                     }}
@@ -1757,49 +1809,55 @@ export function SettingsDrawer({
                       try {
                         const next = await regenerateCompanionToken();
                         setCompanionInfo(next);
-                        const dataUrl = await QRCode.toDataURL(next.url, {
-                          width: 210,
-                          margin: 2,
-                          color: { dark: "#050811", light: "#ffffff" },
-                        }).catch(() => "");
-                        setCompanionQr(dataUrl);
-                        setCompanionMsg("Novo token gerado. Escaneie o QR Code novamente.");
+                        if (next.lanEnabled) {
+                          const dataUrl = await QRCode.toDataURL(next.pairUrl, {
+                            width: 210,
+                            margin: 2,
+                            color: { dark: "#050811", light: "#ffffff" },
+                          }).catch(() => "");
+                          setCompanionQr(dataUrl);
+                        }
+                        setCompanionMsg(
+                          "Sessões anteriores revogadas e novo código de uso único gerado.",
+                        );
                       } finally {
                         setCompanionBusy(false);
                       }
                     }}
                   >
-                    <RefreshCw size={13} /> Novo Token
+                    <RefreshCw size={13} /> Revogar Sessões / Novo Código
                   </button>
-                  <button
-                    type="button"
-                    className="mini-btn accent"
-                    disabled={companionBusy}
-                    onClick={async () => {
-                      setCompanionBusy(true);
-                      setCompanionMsg(null);
-                      try {
-                        const msg = await allowCompanionFirewall();
-                        setCompanionMsg(msg);
-                      } catch (err) {
-                        setCompanionMsg(String(err));
-                      } finally {
-                        setCompanionBusy(false);
-                      }
-                    }}
-                  >
-                    <ShieldCheck size={13} /> Liberar Firewall
-                  </button>
+                  {companionInfo.lanEnabled && (
+                    <button
+                      type="button"
+                      className="mini-btn accent"
+                      disabled={companionBusy}
+                      onClick={async () => {
+                        setCompanionBusy(true);
+                        setCompanionMsg(null);
+                        try {
+                          const msg = await allowCompanionFirewall();
+                          setCompanionMsg(msg);
+                        } catch (err) {
+                          setCompanionMsg(String(err));
+                        } finally {
+                          setCompanionBusy(false);
+                        }
+                      }}
+                    >
+                      <ShieldCheck size={13} /> Liberar Firewall
+                    </button>
+                  )}
                 </div>
 
                 {companionMsg && <p className="field-hint">{companionMsg}</p>}
 
                 <div className="companion-steps">
-                  <strong>Como conectar em 10 segundos:</strong>
+                  <strong>Como conectar com segurança:</strong>
                   <ol>
-                    <li>Conecte o PC e o celular no mesmo Wi-Fi.</li>
-                    <li>Se o celular não abrir a página, clique em <b>Liberar Firewall</b> acima.</li>
-                    <li>Aponte a câmera do celular para o QR Code e toque em <b>Adicionar à Tela de Início</b> para usar como app.</li>
+                    <li>Conecte PC e celular no mesmo Wi-Fi confiável e ative <b>Modo LAN</b>.</li>
+                    <li>Se necessário no primeiro uso, clique em <b>Liberar Firewall</b>.</li>
+                    <li>Escaneie o QR Code (código de uso único troca para cookie <code>HttpOnly</code> de sessão) e toque em <b>Adicionar à Tela de Início</b>.</li>
                   </ol>
                 </div>
               </>

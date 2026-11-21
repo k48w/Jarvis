@@ -33,7 +33,6 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
-use tokio::sync::watch;
 use tts::{ElevenLabsVoice, SpeechOutput};
 use uuid::Uuid;
 
@@ -210,7 +209,9 @@ async fn update_global_shortcut(
             if !prev.trim().is_empty() {
                 let _ = gs.register(prev.as_str());
             }
-            return Err(format!("Não foi possível registrar o atalho '{next}': {err}"));
+            return Err(format!(
+                "Não foi possível registrar o atalho '{next}': {err}"
+            ));
         }
     }
 
@@ -241,7 +242,11 @@ async fn create_conversation(
     title: Option<String>,
     project_id: Option<String>,
 ) -> Result<Conversation, String> {
-    let resolved_project = match project_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let resolved_project = match project_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(pid) => storage::list_projects(&state.data_dir)?
             .into_iter()
             .find(|p| p.id == pid),
@@ -261,7 +266,11 @@ async fn set_conversation_project(
     id: String,
     project_id: Option<String>,
 ) -> Result<Conversation, String> {
-    let resolved_project = match project_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let resolved_project = match project_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(pid) => storage::list_projects(&state.data_dir)?
             .into_iter()
             .find(|p| p.id == pid),
@@ -381,10 +390,7 @@ async fn rename_conversation(
 }
 
 #[tauri::command]
-async fn delete_conversation(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-) -> Result<(), String> {
+async fn delete_conversation(state: State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
     storage::delete_conversation(&state.data_dir, &id)
 }
 
@@ -418,13 +424,13 @@ pub(crate) async fn dispatch_chat_turn(
         return Err("Mensagem vazia".to_string());
     }
 
-    {
-        let mut active = state_arc.active_cancel.lock().await;
-        if let Some(prev_tx) = active.take() {
-            let _ = prev_tx.send(true);
-        }
+    let cleared_ids = state_arc.cancel_all_pending_approvals().await;
+    for cid in cleared_ids {
+        let _ = app.emit(
+            "jarvis:approval-resolved",
+            json!({ "approvalId": cid, "approved": false }),
+        );
     }
-    state_arc.cancel_all_pending_approvals().await;
 
     let stored_text = if attachment.is_some() {
         format!("{trimmed}\n[Captura de tela anexada]")
@@ -442,11 +448,7 @@ pub(crate) async fn dispatch_chat_turn(
     };
     let updated_conv = storage::append_message(&state_arc.data_dir, &conversation_id, user_msg)?;
 
-    let (cancel_tx, cancel_rx) = watch::channel(false);
-    {
-        let mut active = state_arc.active_cancel.lock().await;
-        *active = Some(cancel_tx);
-    }
+    let (cancel_gen, cancel_rx) = state_arc.begin_chat_cancel().await;
 
     let conv_id = updated_conv.id.clone();
     let history = updated_conv.messages.clone();
@@ -464,11 +466,14 @@ pub(crate) async fn dispatch_chat_turn(
         )
         .await;
 
-        {
-            let mut active = state_arc.active_cancel.lock().await;
-            *active = None;
+        state_arc.finish_chat_cancel(cancel_gen).await;
+        let leftover = state_arc.cancel_all_pending_approvals().await;
+        for cid in leftover {
+            let _ = app.emit(
+                "jarvis:approval-resolved",
+                json!({ "approvalId": cid, "approved": false }),
+            );
         }
-        state_arc.cancel_all_pending_approvals().await;
 
         match result {
             Ok((reply_text, response_mode, traces)) => {
@@ -549,47 +554,35 @@ async fn send_message(
             data_base64,
         });
 
-    dispatch_chat_turn(
-        app,
-        Arc::clone(&state),
-        conversation_id,
-        text,
-        attachment,
-    )
-    .await
+    dispatch_chat_turn(app, Arc::clone(&state), conversation_id, text, attachment).await
 }
 
 #[tauri::command]
-async fn cancel_chat(state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    {
-        let mut active = state.active_cancel.lock().await;
-        if let Some(tx) = active.take() {
-            let _ = tx.send(true);
-        }
+async fn cancel_chat(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cancel_active_chat().await;
+    let cleared = state.cancel_all_pending_approvals().await;
+    for cid in cleared {
+        let _ = app.emit(
+            "jarvis:approval-resolved",
+            json!({ "approvalId": cid, "approved": false }),
+        );
     }
-    state.cancel_all_pending_approvals().await;
     Ok(())
 }
 
 #[tauri::command]
 async fn resolve_tool_approval(
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
-    companion: State<'_, Arc<companion::CompanionState>>,
     approval_id: String,
     approved: bool,
 ) -> Result<(), String> {
-    let mut map = state.pending_approvals.lock().await;
-    if let Some(tx) = map.remove(&approval_id) {
-        let _ = tx.send(approved);
+    if state.resolve_approval(&approval_id, approved).await {
+        let _ = app.emit(
+            "jarvis:approval-resolved",
+            json!({ "approvalId": approval_id, "approved": approved }),
+        );
     }
-    drop(map);
-    {
-        let mut pending = companion.pending_approval.lock().await;
-        *pending = None;
-    }
-    let _ = companion.events_tx.send(
-        json!({ "event": "approval_resolved", "data": { "approvalId": approval_id, "approved": approved } }).to_string(),
-    );
     Ok(())
 }
 
@@ -607,8 +600,9 @@ async fn cancel_timer(state: State<'_, Arc<AppState>>, id: String) -> Result<boo
 async fn list_elevenlabs_voices(
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<ElevenLabsVoice>, String> {
-    let key = get_api_key(&state.data_dir, KeySlot::Elevenlabs)
-        .ok_or_else(|| "Salve sua chave da ElevenLabs para listar as vozes da conta.".to_string())?;
+    let key = get_api_key(&state.data_dir, KeySlot::Elevenlabs).ok_or_else(|| {
+        "Salve sua chave da ElevenLabs para listar as vozes da conta.".to_string()
+    })?;
     tts::list_elevenlabs_voices(&state.http, &key).await
 }
 
@@ -686,9 +680,7 @@ async fn start_native_mic_test(
 }
 
 #[tauri::command]
-async fn stop_native_mic_test(
-    mic_ctrl: State<'_, Arc<mic::MicController>>,
-) -> Result<(), String> {
+async fn stop_native_mic_test(mic_ctrl: State<'_, Arc<mic::MicController>>) -> Result<(), String> {
     mic_ctrl.stop_mic_test();
     Ok(())
 }
@@ -726,9 +718,12 @@ async fn start_chatgpt_login(
     state: State<'_, Arc<AppState>>,
     force_register: Option<bool>,
 ) -> Result<ChatGptLoginResult, String> {
-    let (status, models) =
-        oauth::start_chatgpt_login(&state.http, &state.data_dir, force_register.unwrap_or(false))
-            .await?;
+    let (status, models) = oauth::start_chatgpt_login(
+        &state.http,
+        &state.data_dir,
+        force_register.unwrap_or(false),
+    )
+    .await?;
 
     show_main_window(&app);
 
@@ -790,11 +785,7 @@ async fn import_google_oauth_json(
 ) -> Result<GoogleImportResult, String> {
     let (client_id, client_secret, project_id) =
         google_oauth::parse_google_credentials_json(&json_text)?;
-    store_api_key(
-        &state.data_dir,
-        KeySlot::GoogleClientSecret,
-        &client_secret,
-    )?;
+    store_api_key(&state.data_dir, KeySlot::GoogleClientSecret, &client_secret)?;
 
     let mut cfg = state.config.write().await;
     cfg.gemini_auth_mode = GeminiAuthMode::Oauth;
@@ -905,7 +896,8 @@ async fn cancel_agent_task(
 }
 
 #[tauri::command]
-async fn capture_screen() -> Result<ScreenCaptureOutput, String> {
+async fn capture_screen(app: AppHandle) -> Result<ScreenCaptureOutput, String> {
+    let _guard = tools::acquire_screen_capture_guard(&app).await;
     let (width, height, _rw, _rh, data_base64) =
         tokio::task::spawn_blocking(tools::capture_desktop_screen_blocking)
             .await
@@ -920,26 +912,22 @@ async fn capture_screen() -> Result<ScreenCaptureOutput, String> {
 
 #[tauri::command]
 async fn fetch_browser_page(
-    state: State<'_, Arc<AppState>>,
+    _state: State<'_, Arc<AppState>>,
     url: String,
 ) -> Result<BrowserPageOutput, String> {
-    let parsed = tools::validate_http_url(&url)?;
-    let resp = state
-        .http
-        .get(parsed.as_str())
-        .header(
-            "User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        )
-        .send()
-        .await
-        .map_err(|e| format!("Falha ao carregar página: {e}"))?;
+    let (final_parsed, resp) = tools::safe_fetch_url(
+        &url,
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        std::time::Duration::from_secs(15),
+    )
+    .await?;
 
     if !resp.status().is_success() {
         return Err(format!("O site retornou HTTP {}.", resp.status()));
     }
 
-    let final_url = resp.url().to_string();
+    let parsed = final_parsed.clone();
+    let final_url = final_parsed.to_string();
     let html = resp
         .text()
         .await
@@ -952,9 +940,11 @@ async fn fetch_browser_page(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| parsed.host_str().unwrap_or("Página Web").to_string());
 
-    let no_script = regex::Regex::new(r"(?is)<(script|style|noscript|svg)[^>]*>.*?</(script|style|noscript|svg)>")
-        .map(|re| re.replace_all(&html, " ").into_owned())
-        .unwrap_or(html);
+    let no_script = regex::Regex::new(
+        r"(?is)<(script|style|noscript|svg)[^>]*>.*?</(script|style|noscript|svg)>",
+    )
+    .map(|re| re.replace_all(&html, " ").into_owned())
+    .unwrap_or(html);
     let with_breaks = regex::Regex::new(r"(?i)</(p|div|h1|h2|h3|h4|li|br|tr|section|article)>")
         .map(|re| re.replace_all(&no_script, "\n").into_owned())
         .unwrap_or(no_script);
@@ -996,7 +986,7 @@ async fn open_native_browser_window(
     title: Option<String>,
 ) -> Result<(), String> {
     let _ = title;
-    let parsed = tools::validate_http_url(&url)?;
+    let parsed = tools::validate_public_http_url(&url).await?;
     open::that(parsed.as_str()).map_err(|e| format!("Falha ao abrir no navegador padrão: {e}"))?;
     Ok(())
 }
@@ -1181,27 +1171,55 @@ async fn mascot_action(app: AppHandle, action: String) -> Result<(), String> {
         }
         "open_chat" => {
             show_main_window(&app);
-            let _ = app.emit_to("main", "jarvis:tray-action", json!({ "action": "focus_chat" }));
+            let _ = app.emit_to(
+                "main",
+                "jarvis:tray-action",
+                json!({ "action": "focus_chat" }),
+            );
         }
         "new_chat" => {
             show_main_window(&app);
-            let _ = app.emit_to("main", "jarvis:tray-action", json!({ "action": "new_chat" }));
+            let _ = app.emit_to(
+                "main",
+                "jarvis:tray-action",
+                json!({ "action": "new_chat" }),
+            );
         }
         "see_screen" => {
-            let _ = app.emit_to("main", "jarvis:tray-action", json!({ "action": "see_screen" }));
+            let _ = app.emit_to(
+                "main",
+                "jarvis:tray-action",
+                json!({ "action": "see_screen" }),
+            );
         }
         "toggle_mute" => {
-            let _ = app.emit_to("main", "jarvis:tray-action", json!({ "action": "toggle_mute" }));
+            let _ = app.emit_to(
+                "main",
+                "jarvis:tray-action",
+                json!({ "action": "toggle_mute" }),
+            );
         }
         "toggle_wake" => {
-            let _ = app.emit_to("main", "jarvis:tray-action", json!({ "action": "toggle_wake" }));
+            let _ = app.emit_to(
+                "main",
+                "jarvis:tray-action",
+                json!({ "action": "toggle_wake" }),
+            );
         }
         "cycle_theme" => {
-            let _ = app.emit_to("main", "jarvis:tray-action", json!({ "action": "cycle_theme" }));
+            let _ = app.emit_to(
+                "main",
+                "jarvis:tray-action",
+                json!({ "action": "cycle_theme" }),
+            );
         }
         "hide" => {
             let _ = ensure_mascot_window(&app, false);
-            let _ = app.emit_to("main", "jarvis:tray-action", json!({ "action": "hide_mascot" }));
+            let _ = app.emit_to(
+                "main",
+                "jarvis:tray-action",
+                json!({ "action": "hide_mascot" }),
+            );
         }
         _ => {}
     }
@@ -1277,10 +1295,7 @@ async fn save_skill(
 }
 
 #[tauri::command]
-async fn delete_skill(
-    state: State<'_, Arc<AppState>>,
-    id_or_slug: String,
-) -> Result<bool, String> {
+async fn delete_skill(state: State<'_, Arc<AppState>>, id_or_slug: String) -> Result<bool, String> {
     routines::delete_skill(&state.data_dir, &id_or_slug)
 }
 
@@ -1320,10 +1335,7 @@ async fn toggle_routine(
 }
 
 #[tauri::command]
-async fn delete_routine(
-    state: State<'_, Arc<AppState>>,
-    id: String,
-) -> Result<bool, String> {
+async fn delete_routine(state: State<'_, Arc<AppState>>, id: String) -> Result<bool, String> {
     routines::delete_routine(&state.data_dir, &id)
 }
 
@@ -1340,6 +1352,23 @@ async fn set_companion_enabled(
     enabled: bool,
 ) -> Result<companion::CompanionInfo, String> {
     companion.enabled.store(enabled, Ordering::SeqCst);
+    if !enabled {
+        companion.revoke_sessions_and_rotate_code().await;
+    }
+    companion.notify_listener_config().await;
+    Ok(companion.info().await)
+}
+
+#[tauri::command]
+async fn set_companion_lan_enabled(
+    companion: State<'_, Arc<companion::CompanionState>>,
+    lan_enabled: bool,
+) -> Result<companion::CompanionInfo, String> {
+    companion.lan_enabled.store(lan_enabled, Ordering::SeqCst);
+    if !lan_enabled {
+        companion.revoke_sessions_and_rotate_code().await;
+    }
+    companion.notify_listener_config().await;
     Ok(companion.info().await)
 }
 
@@ -1347,7 +1376,7 @@ async fn set_companion_enabled(
 async fn regenerate_companion_token(
     companion: State<'_, Arc<companion::CompanionState>>,
 ) -> Result<companion::CompanionInfo, String> {
-    companion.regenerate_token().await;
+    companion.revoke_sessions_and_rotate_code().await;
     Ok(companion.info().await)
 }
 
@@ -1363,10 +1392,20 @@ async fn allow_companion_firewall(
 }
 
 fn setup_tray(app: &AppHandle, state: Arc<AppState>) -> tauri::Result<()> {
-    let toggle_item =
-        MenuItem::with_id(app, "toggle", "Mostrar / Ocultar J.A.R.V.I.S.", true, None::<&str>)?;
-    let mascot_item =
-        MenuItem::with_id(app, "mascot", "Mostrar / Ocultar Mascote", true, None::<&str>)?;
+    let toggle_item = MenuItem::with_id(
+        app,
+        "toggle",
+        "Mostrar / Ocultar J.A.R.V.I.S.",
+        true,
+        None::<&str>,
+    )?;
+    let mascot_item = MenuItem::with_id(
+        app,
+        "mascot",
+        "Mostrar / Ocultar Mascote",
+        true,
+        None::<&str>,
+    )?;
     let listen_item = MenuItem::with_id(app, "listen", "Ouvir agora", true, None::<&str>)?;
     let new_chat_item = MenuItem::with_id(app, "new_chat", "Nova conversa", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
@@ -1374,7 +1413,14 @@ fn setup_tray(app: &AppHandle, state: Arc<AppState>) -> tauri::Result<()> {
 
     let menu = Menu::with_items(
         app,
-        &[&toggle_item, &mascot_item, &listen_item, &new_chat_item, &sep, &quit_item],
+        &[
+            &toggle_item,
+            &mascot_item,
+            &listen_item,
+            &new_chat_item,
+            &sep,
+            &quit_item,
+        ],
     )?;
 
     let icon = app
@@ -1588,6 +1634,7 @@ fn main() {
             delete_routine,
             get_companion_info,
             set_companion_enabled,
+            set_companion_lan_enabled,
             regenerate_companion_token,
             allow_companion_firewall,
         ])

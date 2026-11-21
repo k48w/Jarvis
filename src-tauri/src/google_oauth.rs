@@ -1,4 +1,4 @@
-use crate::config::{atomic_write, get_api_key, KeySlot};
+use crate::config::{get_api_key, KeySlot};
 use crate::oauth::{
     decode_jwt_claims, html_page, parse_callback_query, pkce_s256_challenge, random_base64url,
     read_http_request_target, write_http_response,
@@ -17,8 +17,7 @@ const GOOGLE_AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_USERINFO_URL: &str = "https://openidconnect.googleapis.com/v1/userinfo";
 const GOOGLE_REVOKE_URL: &str = "https://oauth2.googleapis.com/revoke";
-const GOOGLE_SCOPES: &str =
-    "openid email profile https://www.googleapis.com/auth/cloud-platform";
+const GOOGLE_SCOPES: &str = "openid email profile https://www.googleapis.com/auth/cloud-platform";
 
 const KEYRING_SERVICE: &str = "studio.jarvis.cinematic";
 const KEYRING_GOOGLE_SESSION: &str = "google_oauth_session";
@@ -63,8 +62,8 @@ pub fn load_google_session(data_dir: &Path) -> Option<GoogleOAuthSession> {
             }
         }
     }
-    fs::read_to_string(fallback_session_path(data_dir))
-        .ok()
+    crate::config::read_encrypted_fallback(&fallback_session_path(data_dir))
+        .and_then(|bytes| String::from_utf8(bytes).ok())
         .and_then(|raw| serde_json::from_str::<GoogleOAuthSession>(&raw).ok())
 }
 
@@ -82,7 +81,8 @@ fn save_google_session(data_dir: &Path, session: &GoogleOAuthSession) -> Result<
         }
         Ok(())
     } else {
-        atomic_write(&fallback, raw.as_bytes())
+        eprintln!("Aviso de segurança: sessão Google salva via armazenamento alternativo cifrado (DPAPI).");
+        crate::config::write_encrypted_fallback(&fallback, raw.as_bytes())
     }
 }
 
@@ -109,7 +109,9 @@ pub fn get_google_auth_status(data_dir: &Path) -> GoogleAuthStatus {
     }
 }
 
-pub fn parse_google_credentials_json(raw: &str) -> Result<(String, String, Option<String>), String> {
+pub fn parse_google_credentials_json(
+    raw: &str,
+) -> Result<(String, String, Option<String>), String> {
     let parsed: Value = serde_json::from_str(raw.trim())
         .map_err(|_| "Arquivo JSON inválido do Google Cloud Console.".to_string())?;
 
@@ -236,9 +238,7 @@ pub async fn start_google_login(
         let (mut stream, _) = match accept_res {
             Ok(Ok(pair)) => pair,
             Ok(Err(e)) => return Err(format!("Erro ao receber retorno do Google: {e}")),
-            Err(_) => {
-                return Err("Tempo esgotado aguardando login com a conta Google.".to_string())
-            }
+            Err(_) => return Err("Tempo esgotado aguardando login com a conta Google.".to_string()),
         };
 
         let Some(target) = read_http_request_target(&mut stream).await else {
@@ -293,7 +293,12 @@ pub async fn start_google_login(
         Ok(r) => r,
         Err(e) => {
             let msg = format!("Erro de rede ao trocar código Google OAuth: {e}");
-            let page = html_page("J.A.R.V.I.S. — Erro Google", "Falha de conexão", &msg, false);
+            let page = html_page(
+                "J.A.R.V.I.S. — Erro Google",
+                "Falha de conexão",
+                &msg,
+                false,
+            );
             write_http_response(&mut callback_stream, "502 Bad Gateway", "text/html", &page).await;
             return Err(msg);
         }
@@ -397,9 +402,8 @@ pub async fn get_valid_google_token(
                 .to_string(),
         );
     };
-    let secret = get_api_key(data_dir, KeySlot::GoogleClientSecret).ok_or_else(|| {
-        "Client Secret do Google OAuth ausente para renovar o token.".to_string()
-    })?;
+    let secret = get_api_key(data_dir, KeySlot::GoogleClientSecret)
+        .ok_or_else(|| "Client Secret do Google OAuth ausente para renovar o token.".to_string())?;
 
     let resp = http
         .post(GOOGLE_TOKEN_URL)

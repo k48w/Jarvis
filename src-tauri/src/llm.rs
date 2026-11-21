@@ -171,7 +171,11 @@ impl GeminiAuth {
             GeminiAuth::ApiKey(key) => req.header("x-goog-api-key", key),
             GeminiAuth::OAuth { token, project_id } => {
                 let req = req.bearer_auth(token);
-                if let Some(pid) = project_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                if let Some(pid) = project_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
                     req.header("x-goog-user-project", pid)
                 } else {
                     req
@@ -181,10 +185,7 @@ impl GeminiAuth {
     }
 }
 
-async fn resolve_gemini_auth(
-    state: &Arc<AppState>,
-    cfg: &AppConfig,
-) -> Result<GeminiAuth, String> {
+async fn resolve_gemini_auth(state: &Arc<AppState>, cfg: &AppConfig) -> Result<GeminiAuth, String> {
     if cfg.gemini_auth_mode == GeminiAuthMode::Oauth {
         let (token, session_proj) =
             google_oauth::get_valid_google_token(&state.http, &state.data_dir).await?;
@@ -319,7 +320,10 @@ async fn run_gemini(
                         if part["thought"].as_bool() == Some(true) {
                             continue;
                         }
-                        if !full_text.is_empty() && round_text.is_empty() && !full_text.ends_with(['\n', ' ']) {
+                        if !full_text.is_empty()
+                            && round_text.is_empty()
+                            && !full_text.ends_with(['\n', ' '])
+                        {
                             emit_delta(app, conv_id, "\n\n");
                             full_text.push_str("\n\n");
                         }
@@ -549,7 +553,10 @@ async fn run_openai_responses(
                 match ev_type {
                     "response.output_text.delta" => {
                         if let Some(text) = parsed["delta"].as_str() {
-                            if !full_text.is_empty() && round_text.is_empty() && !full_text.ends_with(['\n', ' ']) {
+                            if !full_text.is_empty()
+                                && round_text.is_empty()
+                                && !full_text.ends_with(['\n', ' '])
+                            {
                                 emit_delta(app, conv_id, "\n\n");
                                 full_text.push_str("\n\n");
                             }
@@ -561,10 +568,10 @@ async fn run_openai_responses(
                     "response.output_item.added" => {
                         let item = &parsed["item"];
                         if item["type"].as_str() == Some("function_call") {
-                            let key = item["id"]
-                                .as_str()
-                                .map(str::to_string)
-                                .unwrap_or_else(|| format!("idx_{}", parsed["output_index"].as_u64().unwrap_or(0)));
+                            let key =
+                                item["id"].as_str().map(str::to_string).unwrap_or_else(|| {
+                                    format!("idx_{}", parsed["output_index"].as_u64().unwrap_or(0))
+                                });
                             if !calls_by_key.contains_key(&key) {
                                 call_order.push(key.clone());
                             }
@@ -586,7 +593,9 @@ async fn run_openai_responses(
                         let key = parsed["item_id"]
                             .as_str()
                             .map(str::to_string)
-                            .unwrap_or_else(|| format!("idx_{}", parsed["output_index"].as_u64().unwrap_or(0)));
+                            .unwrap_or_else(|| {
+                                format!("idx_{}", parsed["output_index"].as_u64().unwrap_or(0))
+                            });
                         if !calls_by_key.contains_key(&key) {
                             call_order.push(key.clone());
                         }
@@ -599,7 +608,9 @@ async fn run_openai_responses(
                         let key = parsed["item_id"]
                             .as_str()
                             .map(str::to_string)
-                            .unwrap_or_else(|| format!("idx_{}", parsed["output_index"].as_u64().unwrap_or(0)));
+                            .unwrap_or_else(|| {
+                                format!("idx_{}", parsed["output_index"].as_u64().unwrap_or(0))
+                            });
                         if let Some(entry) = calls_by_key.get_mut(&key) {
                             if let Some(args) = parsed["arguments"].as_str() {
                                 if !args.is_empty() {
@@ -611,10 +622,10 @@ async fn run_openai_responses(
                     "response.output_item.done" => {
                         let item = &parsed["item"];
                         if item["type"].as_str() == Some("function_call") {
-                            let key = item["id"]
-                                .as_str()
-                                .map(str::to_string)
-                                .unwrap_or_else(|| format!("idx_{}", parsed["output_index"].as_u64().unwrap_or(0)));
+                            let key =
+                                item["id"].as_str().map(str::to_string).unwrap_or_else(|| {
+                                    format!("idx_{}", parsed["output_index"].as_u64().unwrap_or(0))
+                                });
                             if !calls_by_key.contains_key(&key) {
                                 call_order.push(key.clone());
                             }
@@ -654,7 +665,9 @@ async fn run_openai_responses(
 
         let mut round_images: Vec<ImageAttachment> = Vec::new();
         for key in call_order {
-            let Some(call) = calls_by_key.remove(&key) else { continue };
+            let Some(call) = calls_by_key.remove(&key) else {
+                continue;
+            };
             if call.name.is_empty() {
                 continue;
             }
@@ -664,7 +677,11 @@ async fn run_openai_responses(
             } else {
                 call.call_id
             };
-            let args_str = if call.arguments.is_empty() { "{}" } else { &call.arguments };
+            let args_str = if call.arguments.is_empty() {
+                "{}"
+            } else {
+                &call.arguments
+            };
             input.push(json!({
                 "type": "function_call",
                 "call_id": call_id,
@@ -673,15 +690,9 @@ async fn run_openai_responses(
             }));
 
             let args: Value = serde_json::from_str(args_str).unwrap_or_else(|_| json!({}));
-            let outcome = tools::execute_tool_with_policy(
-                app,
-                state,
-                conv_id,
-                &call_id,
-                &call.name,
-                &args,
-            )
-            .await;
+            let outcome =
+                tools::execute_tool_with_policy(app, state, conv_id, &call_id, &call.name, &args)
+                    .await;
             if outcome.triggered_alert {
                 *response_mode = "alert".to_string();
             }
@@ -737,8 +748,7 @@ pub async fn run_chat_turn(
     let cfg = state.config.read().await.clone();
     let memories = storage::list_memories(&state.data_dir).unwrap_or_default();
     let agent_runs = state.agent_runs.lock().await.clone();
-    let system_prompt =
-        build_system_prompt(&cfg, &memories, project_path.as_deref(), &agent_runs);
+    let system_prompt = build_system_prompt(&cfg, &memories, project_path.as_deref(), &agent_runs);
 
     let window_start = history.len().saturating_sub(24);
     let recent = &history[window_start..];
@@ -985,7 +995,9 @@ fn shorten_sentence(sent: &str, max: usize) -> String {
         .rfind(|c| matches!(c, ',' | ';' | '—' | '–'))
         .filter(|&p| p > max / 2)
         .unwrap_or_else(|| head.rfind(' ').unwrap_or(head.len()));
-    let mut s = head[..cut].trim_end_matches(|c: char| !c.is_alphanumeric()).to_string();
+    let mut s = head[..cut]
+        .trim_end_matches(|c: char| !c.is_alphanumeric())
+        .to_string();
     s.push('.');
     s
 }
@@ -1251,7 +1263,10 @@ pub async fn test_provider_connection(state: &Arc<AppState>) -> ConnectionTestRe
                         } else {
                             "API Key"
                         };
-                        Ok(format!("Conectado ao Gemini ({via} · {})", cfg.gemini_model))
+                        Ok(format!(
+                            "Conectado ao Gemini ({via} · {})",
+                            cfg.gemini_model
+                        ))
                     }
                     Ok(r) => {
                         let s = r.status();
@@ -1265,7 +1280,8 @@ pub async fn test_provider_connection(state: &Arc<AppState>) -> ConnectionTestRe
         Provider::Chatgpt => {
             match oauth::get_valid_access_token(&state.http, &state.data_dir).await {
                 Err(e) => Err(e),
-                Ok(token) => match oauth::list_chatgpt_models_with_token(&state.http, &token).await {
+                Ok(token) => match oauth::list_chatgpt_models_with_token(&state.http, &token).await
+                {
                     Ok(models) => {
                         let plan_ok = oauth::load_session(&state.data_dir)
                             .map(|s| s.plan_usage_granted)
@@ -1401,7 +1417,8 @@ pub async fn transcribe_audio(
                 GeminiAuth::OAuth { token, project_id }
             } else {
                 let key = gemini_key.ok_or_else(|| {
-                    "Chave Gemini ou login Google OAuth não configurado para transcrição.".to_string()
+                    "Chave Gemini ou login Google OAuth não configurado para transcrição."
+                        .to_string()
                 })?;
                 GeminiAuth::ApiKey(key)
             };

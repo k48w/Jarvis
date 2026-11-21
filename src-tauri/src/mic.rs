@@ -30,6 +30,7 @@ pub struct RecordedAudio {
 pub struct MicController {
     rec_stop: Mutex<Option<Arc<AtomicBool>>>,
     rec_samples: Arc<Mutex<Vec<i16>>>,
+    rec_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
     test_stop: Mutex<Option<Arc<AtomicBool>>>,
     wake_stop: Mutex<Option<Arc<AtomicBool>>>,
     wake_paused: Arc<AtomicBool>,
@@ -40,6 +41,7 @@ impl Default for MicController {
         Self {
             rec_stop: Mutex::new(None),
             rec_samples: Arc::new(Mutex::new(Vec::new())),
+            rec_thread: Mutex::new(None),
             test_stop: Mutex::new(None),
             wake_stop: Mutex::new(None),
             wake_paused: Arc::new(AtomicBool::new(false)),
@@ -205,16 +207,7 @@ where
     };
 
     let mut hwi = HWAVEIN::default();
-    let open_rc = unsafe {
-        waveInOpen(
-            Some(&mut hwi),
-            dev_id,
-            &wfx,
-            None,
-            None,
-            CALLBACK_NULL,
-        )
-    };
+    let open_rc = unsafe { waveInOpen(Some(&mut hwi), dev_id, &wfx, None, None, CALLBACK_NULL) };
     if open_rc != 0 {
         return Err(format!(
             "Não foi possível abrir o microfone do Windows (erro WinMM {open_rc}). Verifique se o microfone está conectado e permitido nas configurações de privacidade."
@@ -242,14 +235,18 @@ where
             let a_rc = waveInAddBuffer(hwi, hdr, std::mem::size_of::<WAVEHDR>() as u32);
             if a_rc != 0 {
                 let _ = waveInClose(hwi);
-                return Err(format!("Falha ao enfileirar buffer de áudio (erro {a_rc})."));
+                return Err(format!(
+                    "Falha ao enfileirar buffer de áudio (erro {a_rc})."
+                ));
             }
         }
         let s_rc = waveInStart(hwi);
         if s_rc != 0 {
             let _ = waveInReset(hwi);
             let _ = waveInClose(hwi);
-            return Err(format!("Falha ao iniciar captura do microfone (erro {s_rc})."));
+            return Err(format!(
+                "Falha ao iniciar captura do microfone (erro {s_rc})."
+            ));
         }
     }
 
@@ -315,6 +312,9 @@ impl MicController {
         device_id: Option<String>,
     ) -> Result<(), String> {
         self.stop_recording_flag_only();
+        if let Some(prev_handle) = self.rec_thread.lock().unwrap().take() {
+            let _ = prev_handle.join();
+        }
         self.wake_paused.store(true, Ordering::SeqCst);
 
         {
@@ -341,7 +341,7 @@ impl MicController {
             }
         }
 
-        std::thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             let started = Instant::now();
             let mut heard_speech = false;
             let mut silence_since: Option<Instant> = None;
@@ -380,6 +380,10 @@ impl MicController {
                 let _ = app.emit("jarvis:mic-error", json!({ "error": err }));
             }
         });
+        {
+            let mut th = self.rec_thread.lock().unwrap();
+            *th = Some(handle);
+        }
 
         Ok(())
     }
@@ -394,8 +398,9 @@ impl MicController {
 
     pub fn stop_recording(&self) -> RecordedAudio {
         self.stop_recording_flag_only();
-        // Give the waveIn thread a moment to flush its final buffer
-        std::thread::sleep(Duration::from_millis(60));
+        if let Some(handle) = self.rec_thread.lock().unwrap().take() {
+            let _ = handle.join();
+        }
         let samples = {
             let mut buf = self.rec_samples.lock().unwrap();
             std::mem::take(&mut *buf)
@@ -651,9 +656,6 @@ mod tests {
             parse_wake_command_rust("Oi Jarves, abre o navegador"),
             Some("abre o navegador".to_string())
         );
-        assert_eq!(
-            parse_wake_command_rust("Fala Javes!"),
-            Some(String::new())
-        );
+        assert_eq!(parse_wake_command_rust("Fala Javes!"), Some(String::new()));
     }
 }

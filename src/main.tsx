@@ -380,6 +380,7 @@ function App() {
   const nativeMicRecordingRef = useRef(false);
   const browserSpeechRef = useRef<{ stop: () => void } | null>(null);
   const wakeMonitorRef = useRef<WakeWordMonitor | null>(null);
+  const wakeGenRef = useRef(0);
   const handsFreeSessionRef = useRef(false);
   const handsFreeTimerRef = useRef<number>(0);
   const mascotClearTimerRef = useRef<number>(0);
@@ -1212,12 +1213,21 @@ function App() {
     }
 
     if (isTauri) {
+      const gen = ++wakeGenRef.current;
       void setNativeWakeWord(true, config.mic_device_id).catch((err) => {
-        setErrorBanner(err instanceof Error ? err.message : String(err));
+        if (wakeGenRef.current === gen) {
+          setErrorBanner(err instanceof Error ? err.message : String(err));
+        }
       });
       return () => {
-        void setNativeWakeWord(false).catch(() => {});
-        setWakeMicLevel(0);
+        const offGen = ++wakeGenRef.current;
+        void setNativeWakeWord(false)
+          .catch(() => {})
+          .finally(() => {
+            if (wakeGenRef.current === offGen) {
+              setWakeMicLevel(0);
+            }
+          });
       };
     }
 
@@ -1264,69 +1274,70 @@ function App() {
 
   useEffect(() => {
     if (!isTauri) return;
-    let unMicLvl: (() => void) | undefined;
-    let unMicAuto: (() => void) | undefined;
-    let unMicErr: (() => void) | undefined;
-    let unWakeLvl: (() => void) | undefined;
-    let unWakeTrig: (() => void) | undefined;
-    let unWakeErr: (() => void) | undefined;
+    let disposed = false;
+    const unsubs: Array<() => void> = [];
+    const track = (p: Promise<() => void>) => {
+      void p.then((fn) => {
+        if (disposed) {
+          fn();
+        } else {
+          unsubs.push(fn);
+        }
+      });
+    };
 
-    void onMicLevel((lvl) => {
-      audioLevelRef.current = audioLevelRef.current * 0.4 + lvl * 0.6;
-    }).then((fn) => {
-      unMicLvl = fn;
-    });
+    track(
+      onMicLevel((lvl) => {
+        audioLevelRef.current = audioLevelRef.current * 0.4 + lvl * 0.6;
+      }),
+    );
 
-    void onMicAutoStop(() => {
-      if (nativeMicRecordingRef.current) {
-        void finishMicRecording();
-      }
-    }).then((fn) => {
-      unMicAuto = fn;
-    });
+    track(
+      onMicAutoStop(() => {
+        if (nativeMicRecordingRef.current) {
+          void finishMicRecording();
+        }
+      }),
+    );
 
-    void onMicError((err) => {
-      nativeMicRecordingRef.current = false;
-      setErrorBanner(err);
-      activate("idle");
-    }).then((fn) => {
-      unMicErr = fn;
-    });
+    track(
+      onMicError((err) => {
+        nativeMicRecordingRef.current = false;
+        setErrorBanner(err);
+        activate("idle");
+      }),
+    );
 
-    void onWakeLevel((lvl) => {
-      setWakeMicLevel((prev) => prev * 0.5 + lvl * 0.5);
-    }).then((fn) => {
-      unWakeLvl = fn;
-    });
+    track(
+      onWakeLevel((lvl) => {
+        setWakeMicLevel((prev) => prev * 0.5 + lvl * 0.5);
+      }),
+    );
 
-    void onWakeTriggered(({ command }) => {
-      if (isStreamingRef.current || modeRef.current === "thinking") return;
-      notifyMascot(
-        command ? `Ouvido: "${command}"` : "Estou ouvindo, senhor!",
-        "cheer",
-      );
-      if (command) {
-        void submitText(command, true);
-      } else if (modeRef.current !== "listening") {
-        void toggleListen();
-      }
-    }).then((fn) => {
-      unWakeTrig = fn;
-    });
+    track(
+      onWakeTriggered(({ command }) => {
+        if (isStreamingRef.current || modeRef.current === "thinking") return;
+        notifyMascot(
+          command ? `Ouvido: "${command}"` : "Estou ouvindo, senhor!",
+          "cheer",
+        );
+        if (command) {
+          void submitText(command, true);
+        } else if (modeRef.current !== "listening") {
+          void toggleListen();
+        }
+      }),
+    );
 
-    void onWakeError((err) => {
-      setErrorBanner(err);
-    }).then((fn) => {
-      unWakeErr = fn;
-    });
+    track(
+      onWakeError((err) => {
+        setErrorBanner(err);
+      }),
+    );
 
     return () => {
-      unMicLvl?.();
-      unMicAuto?.();
-      unMicErr?.();
-      unWakeLvl?.();
-      unWakeTrig?.();
-      unWakeErr?.();
+      disposed = true;
+      for (const fn of unsubs) fn();
     };
   }, []);
 
@@ -1349,12 +1360,20 @@ function App() {
   }, [timers.length]);
 
   useEffect(() => {
-    let unChat: (() => void) | undefined;
-    let unApprove: (() => void) | undefined;
-    let unTimer: (() => void) | undefined;
-    let unAgentSummary: (() => void) | undefined;
+    let disposed = false;
+    const unsubs: Array<() => void> = [];
+    const safeBind = (p: Promise<() => void>) => {
+      void p.then((fn) => {
+        if (disposed) {
+          fn();
+        } else {
+          unsubs.push(fn);
+        }
+      });
+    };
 
-    void onAgentCompletedSummary((ev) => {
+    safeBind(
+      onAgentCompletedSummary((ev) => {
       notifyMascot(ev.spokenSummary, "cheer");
       const summaryText = `**Resumo do agente ${ev.agentName}:**\n\n${ev.cardSummary}`;
       setMessages((prev) => [
@@ -1387,24 +1406,15 @@ function App() {
         speech.pushDelta(ev.spokenSummary);
         speech.finish();
       }
-    }).then((fn) => {
-      unAgentSummary = fn;
-    });
-    let unTray: (() => void) | undefined;
-    let unAgent: (() => void) | undefined;
-    let unBrowserPanel: (() => void) | undefined;
-    let unScreenPulse: (() => void) | undefined;
-    let unFileDiff: (() => void) | undefined;
-    let unTerminal: (() => void) | undefined;
-    let unRoutine: (() => void) | undefined;
-    let unCompanion: (() => void) | undefined;
-    let unApprovalResolved: (() => void) | undefined;
+      }),
+    );
     let pulseTimer = 0;
 
     void listSkills().then(setSkills).catch(() => {});
     void listRoutines().then(setRoutines).catch(() => {});
 
-    void onChatEvent((ev) => {
+    safeBind(
+      onChatEvent((ev) => {
       if (ev.conversationId.startsWith("agent:")) {
         setAgents((prev) =>
           prev.map((a) => {
@@ -1574,17 +1584,17 @@ function App() {
         notifyMascot("Ocorreu um erro, senhor.", "alert");
         activate("idle");
       }
-    }).then((fn) => {
-      unChat = fn;
-    });
+      }),
+    );
 
-    void onToolApproval((req) => {
-      setPendingApproval(req);
-    }).then((fn) => {
-      unApprove = fn;
-    });
+    safeBind(
+      onToolApproval((req) => {
+        setPendingApproval(req);
+      }),
+    );
 
-    void onTimerFired((ev) => {
+    safeBind(
+      onTimerFired((ev) => {
       void refreshLists();
       activate("alert", { suppressLoop: false });
       setErrorBanner(`⏰ Timer concluído: ${ev.label}`);
@@ -1604,11 +1614,11 @@ function App() {
       } else {
         scheduleIdle(4500);
       }
-    }).then((fn) => {
-      unTimer = fn;
-    });
+      }),
+    );
 
-    void onTrayAction((ev) => {
+    safeBind(
+      onTrayAction((ev) => {
       if (ev.action === "listen") {
         void toggleListen();
       } else if (ev.action === "new_chat") {
@@ -1628,147 +1638,135 @@ function App() {
       } else if (ev.action === "hide_mascot") {
         handleMascotQuickAction("hide");
       }
-    }).then((fn) => {
-      unTray = fn;
-    });
+      }),
+    );
 
-    void onAgentSpawned((ev) => {
-      setAgents((prev) => {
-        if (prev.some((a) => a.id === ev.id)) return prev;
-        return [
-          {
-            id: ev.id,
-            role: ev.role,
-            name: ev.name,
-            task: ev.task,
-            status: "running",
-            output: "",
-            startedAt: Date.now(),
-            traces: [],
-          },
-          ...prev,
-        ];
-      });
-    }).then((fn) => {
-      unAgent = fn;
-    });
-
-    void onBrowserPanel((ev) => {
-      if (ev.open) {
-        if (ev.url) setBrowserUrl(ev.url);
-        if (ev.title) setBrowserTitle(ev.title);
-        setBrowserSessionOpen(true);
-        setWorkspaceView("browser");
-      } else {
-        setBrowserSessionOpen(false);
-        setWorkspaceView((cur) => (cur === "browser" ? "core" : cur));
-      }
-    }).then((fn) => {
-      unBrowserPanel = fn;
-    });
-
-    void onScreenPulse((ev) => {
-      setScreenPulseKind(ev.kind);
-      window.clearTimeout(pulseTimer);
-      pulseTimer = window.setTimeout(() => setScreenPulseKind(null), 1300);
-    }).then((fn) => {
-      unScreenPulse = fn;
-    });
-
-    void onFileDiff((ev) => {
-      setFileDiffs((prev) => [ev, ...prev].slice(0, 40));
-      notifyMascot(`Arquivo atualizado: ${ev.fileName}`, "cheer");
-    }).then((fn) => {
-      unFileDiff = fn;
-    });
-
-    void onTerminalEvent((ev) => {
-      setTerminalSessions((prev) => {
-        if (ev.kind === "start") {
-          const next: TerminalSession = {
-            id: ev.id,
-            command: ev.command ?? "",
-            cwd: ev.cwd ?? "",
-            running: true,
-            lines: [],
-          };
-          return [...prev.slice(-19), next];
-        }
-        return prev.map((s) => {
-          if (s.id !== ev.id) return s;
-          if (ev.kind === "stdout" || ev.kind === "stderr") {
-            return {
-              ...s,
-              lines: [
-                ...s.lines.slice(-400),
-                { kind: ev.kind, text: ev.line ?? "" },
-              ],
-            };
-          }
-          if (ev.kind === "exit") {
-            return {
-              ...s,
-              running: false,
-              exitCode: ev.exitCode,
-              cancelled: ev.cancelled,
-            };
-          }
-          return s;
+    safeBind(
+      onAgentSpawned((ev) => {
+        setAgents((prev) => {
+          if (prev.some((a) => a.id === ev.id)) return prev;
+          return [
+            {
+              id: ev.id,
+              role: ev.role,
+              name: ev.name,
+              task: ev.task,
+              status: "running",
+              output: "",
+              startedAt: Date.now(),
+              traces: [],
+            },
+            ...prev,
+          ];
         });
-      });
-    }).then((fn) => {
-      unTerminal = fn;
-    });
+      }),
+    );
 
-    void onRoutineTrigger((ev) => {
-      notifyMascot(`⏰ Rotina automática: ${ev.name}`, "cheer");
-      void listRoutines().then(setRoutines).catch(() => {});
-      if (!isStreamingRef.current) {
-        void submitText(ev.prompt, false);
-      }
-    }).then((fn) => {
-      unRoutine = fn;
-    });
+    safeBind(
+      onBrowserPanel((ev) => {
+        if (ev.open) {
+          if (ev.url) setBrowserUrl(ev.url);
+          if (ev.title) setBrowserTitle(ev.title);
+          setBrowserSessionOpen(true);
+          setWorkspaceView("browser");
+        } else {
+          setBrowserSessionOpen(false);
+          setWorkspaceView((cur) => (cur === "browser" ? "core" : cur));
+        }
+      }),
+    );
 
-    void onCompanionSync((ev) => {
-      const targetId = ev.conversationId;
-      if (targetId && targetId !== activeConvIdRef.current) {
-        setActiveConvId(targetId);
-        activeConvIdRef.current = targetId;
-      }
-      if (targetId) {
-        void getConversation(targetId)
-          .then((conv) => {
-            setMessages(conv.messages);
-            setActiveProjectId(conv.project_id ?? null);
-          })
-          .catch(() => {});
-      }
-      void refreshLists();
-    }).then((fn) => {
-      unCompanion = fn;
-    });
+    safeBind(
+      onScreenPulse((ev) => {
+        setScreenPulseKind(ev.kind);
+        window.clearTimeout(pulseTimer);
+        pulseTimer = window.setTimeout(() => setScreenPulseKind(null), 1300);
+      }),
+    );
 
-    void onApprovalResolved(() => {
-      setPendingApproval(null);
-    }).then((fn) => {
-      unApprovalResolved = fn;
-    });
+    safeBind(
+      onFileDiff((ev) => {
+        setFileDiffs((prev) => [ev, ...prev].slice(0, 40));
+        notifyMascot(`Arquivo atualizado: ${ev.fileName}`, "cheer");
+      }),
+    );
+
+    safeBind(
+      onTerminalEvent((ev) => {
+        setTerminalSessions((prev) => {
+          if (ev.kind === "start") {
+            const next: TerminalSession = {
+              id: ev.id,
+              command: ev.command ?? "",
+              cwd: ev.cwd ?? "",
+              running: true,
+              lines: [],
+            };
+            return [...prev.slice(-19), next];
+          }
+          return prev.map((s) => {
+            if (s.id !== ev.id) return s;
+            if (ev.kind === "stdout" || ev.kind === "stderr") {
+              return {
+                ...s,
+                lines: [
+                  ...s.lines.slice(-400),
+                  { kind: ev.kind, text: ev.line ?? "" },
+                ],
+              };
+            }
+            if (ev.kind === "exit") {
+              return {
+                ...s,
+                running: false,
+                exitCode: ev.exitCode,
+                cancelled: ev.cancelled,
+              };
+            }
+            return s;
+          });
+        });
+      }),
+    );
+
+    safeBind(
+      onRoutineTrigger((ev) => {
+        notifyMascot(`⏰ Rotina automática: ${ev.name}`, "cheer");
+        void listRoutines().then(setRoutines).catch(() => {});
+        if (!isStreamingRef.current) {
+          void submitText(ev.prompt, false);
+        }
+      }),
+    );
+
+    safeBind(
+      onCompanionSync((ev) => {
+        const targetId = ev.conversationId;
+        if (targetId && targetId !== activeConvIdRef.current) {
+          setActiveConvId(targetId);
+          activeConvIdRef.current = targetId;
+        }
+        if (targetId) {
+          void getConversation(targetId)
+            .then((conv) => {
+              setMessages(conv.messages);
+              setActiveProjectId(conv.project_id ?? null);
+            })
+            .catch(() => {});
+        }
+        void refreshLists();
+      }),
+    );
+
+    safeBind(
+      onApprovalResolved(() => {
+        setPendingApproval(null);
+      }),
+    );
 
     return () => {
-      unChat?.();
-      unApprove?.();
-      unTimer?.();
-      unAgentSummary?.();
-      unTray?.();
-      unAgent?.();
-      unBrowserPanel?.();
-      unScreenPulse?.();
-      unFileDiff?.();
-      unTerminal?.();
-      unRoutine?.();
-      unCompanion?.();
-      unApprovalResolved?.();
+      disposed = true;
+      for (const fn of unsubs) fn();
       window.clearTimeout(pulseTimer);
     };
   }, []);

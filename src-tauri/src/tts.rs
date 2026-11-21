@@ -35,8 +35,9 @@ pub fn clean_text_for_speech(text: &str) -> String {
     let re_md_link =
         RE_MD_LINK.get_or_init(|| Regex::new(r"\[([^\]]+)\]\([^)]+\)").expect("valid link regex"));
     let re_url = RE_URL.get_or_init(|| Regex::new(r"https?://\S+").expect("valid url regex"));
-    let re_line_prefix = RE_LINE_PREFIX
-        .get_or_init(|| Regex::new(r"(?m)^\s*(?:#{1,6}\s+|[-*+]\s+|\d+\.\s+|>\s+)").expect("valid prefix regex"));
+    let re_line_prefix = RE_LINE_PREFIX.get_or_init(|| {
+        Regex::new(r"(?m)^\s*(?:#{1,6}\s+|[-*+]\s+|\d+\.\s+|>\s+)").expect("valid prefix regex")
+    });
     let re_ws = RE_WS.get_or_init(|| Regex::new(r"\s+").expect("valid ws regex"));
 
     let step1 = re_code_block.replace_all(text, " código exibido na tela ");
@@ -201,9 +202,8 @@ pub async fn synthesize_elevenlabs_mp3(
         return Ok(hit);
     }
 
-    let url = format!(
-        "https://api.elevenlabs.io/v1/text-to-speech/{v_id}?output_format=mp3_44100_128"
-    );
+    let url =
+        format!("https://api.elevenlabs.io/v1/text-to-speech/{v_id}?output_format=mp3_44100_128");
     let body = json!({
         "text": clean,
         "model_id": m_id,

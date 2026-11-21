@@ -110,8 +110,8 @@ pub fn load_session(data_dir: &Path) -> Option<ChatGptOAuthSession> {
             }
         }
     }
-    fs::read_to_string(fallback_session_path(data_dir))
-        .ok()
+    crate::config::read_encrypted_fallback(&fallback_session_path(data_dir))
+        .and_then(|bytes| String::from_utf8(bytes).ok())
         .and_then(|raw| serde_json::from_str::<ChatGptOAuthSession>(&raw).ok())
 }
 
@@ -129,7 +129,8 @@ fn save_session(data_dir: &Path, session: &ChatGptOAuthSession) -> Result<(), St
         }
         Ok(())
     } else {
-        atomic_write(&fallback, raw.as_bytes())
+        eprintln!("Aviso de segurança: sessão ChatGPT salva via armazenamento alternativo cifrado (DPAPI).");
+        crate::config::write_encrypted_fallback(&fallback, raw.as_bytes())
     }
 }
 
@@ -436,7 +437,12 @@ pub async fn start_chatgpt_login(
                 return Err("Validação de segurança state do OAuth falhou.".to_string());
             }
             Err(err) => {
-                let page = html_page("J.A.R.V.I.S. — Login cancelado", "Login não concluído", &err, false);
+                let page = html_page(
+                    "J.A.R.V.I.S. — Login cancelado",
+                    "Login não concluído",
+                    &err,
+                    false,
+                );
                 write_http_response(&mut stream, "400 Bad Request", "text/html", &page).await;
                 return Err(err);
             }
@@ -478,7 +484,12 @@ pub async fn start_chatgpt_login(
         let status = token_resp.status();
         let err_body = token_resp.text().await.unwrap_or_default();
         let msg = format!("OpenAI recusou o token OAuth ({status}): {err_body}");
-        let page = html_page("J.A.R.V.I.S. — Erro OAuth", "Autenticação recusada", &msg, false);
+        let page = html_page(
+            "J.A.R.V.I.S. — Erro OAuth",
+            "Autenticação recusada",
+            &msg,
+            false,
+        );
         write_http_response(&mut callback_stream, "400 Bad Request", "text/html", &page).await;
         return Err(msg);
     }

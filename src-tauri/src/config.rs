@@ -206,18 +206,120 @@ pub fn save_config_file(data_dir: &Path, cfg: &AppConfig) -> Result<(), String> 
     atomic_write(&config_path(data_dir), &json)
 }
 
+const DPAPI_PREFIX: &str = "DPAPI1:";
+
+#[cfg(windows)]
+pub(crate) fn protect_bytes_dpapi(plain: &[u8]) -> Result<Vec<u8>, String> {
+    use windows::Win32::Foundation::{LocalFree, HLOCAL};
+    use windows::Win32::Security::Cryptography::{
+        CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+    };
+
+    let mut in_blob = CRYPT_INTEGER_BLOB {
+        cbData: u32::try_from(plain.len())
+            .map_err(|_| "Segredo excede tamanho DPAPI".to_string())?,
+        pbData: plain.as_ptr() as *mut u8,
+    };
+    let mut out_blob = CRYPT_INTEGER_BLOB::default();
+    unsafe {
+        CryptProtectData(
+            &mut in_blob,
+            None,
+            None,
+            None,
+            None,
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut out_blob,
+        )
+        .map_err(|e| format!("Falha ao cifrar credencial com Windows DPAPI: {e}"))?;
+        let slice = std::slice::from_raw_parts(out_blob.pbData, out_blob.cbData as usize);
+        let result = slice.to_vec();
+        let _ = LocalFree(Some(HLOCAL(out_blob.pbData.cast())));
+        Ok(result)
+    }
+}
+
+#[cfg(not(windows))]
+pub(crate) fn protect_bytes_dpapi(_plain: &[u8]) -> Result<Vec<u8>, String> {
+    Err("Armazenamento seguro indisponível fora do Windows sem keyring do sistema.".to_string())
+}
+
+#[cfg(windows)]
+pub(crate) fn unprotect_bytes_dpapi(cipher: &[u8]) -> Result<Vec<u8>, String> {
+    use windows::Win32::Foundation::{LocalFree, HLOCAL};
+    use windows::Win32::Security::Cryptography::{
+        CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+    };
+
+    let mut in_blob = CRYPT_INTEGER_BLOB {
+        cbData: u32::try_from(cipher.len()).map_err(|_| "Cipher DPAPI inválido".to_string())?,
+        pbData: cipher.as_ptr() as *mut u8,
+    };
+    let mut out_blob = CRYPT_INTEGER_BLOB::default();
+    unsafe {
+        CryptUnprotectData(
+            &mut in_blob,
+            None,
+            None,
+            None,
+            None,
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut out_blob,
+        )
+        .map_err(|e| format!("Falha ao decifrar credencial DPAPI: {e}"))?;
+        let slice = std::slice::from_raw_parts(out_blob.pbData, out_blob.cbData as usize);
+        let result = slice.to_vec();
+        let _ = LocalFree(Some(HLOCAL(out_blob.pbData.cast())));
+        Ok(result)
+    }
+}
+
+#[cfg(not(windows))]
+pub(crate) fn unprotect_bytes_dpapi(_cipher: &[u8]) -> Result<Vec<u8>, String> {
+    Err("Decifração DPAPI disponível apenas no Windows.".to_string())
+}
+
+pub(crate) fn write_encrypted_fallback(path: &Path, plaintext: &[u8]) -> Result<(), String> {
+    use base64::Engine as _;
+    let cipher = protect_bytes_dpapi(plaintext)?;
+    let encoded = format!(
+        "{DPAPI_PREFIX}{}",
+        base64::engine::general_purpose::STANDARD.encode(&cipher)
+    );
+    atomic_write(path, encoded.as_bytes())
+}
+
+pub(crate) fn read_encrypted_fallback(path: &Path) -> Option<Vec<u8>> {
+    use base64::Engine as _;
+    let raw = fs::read_to_string(path).ok()?;
+    let trimmed = raw.trim();
+    let payload = trimmed.strip_prefix(DPAPI_PREFIX)?;
+    let cipher = base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .ok()?;
+    unprotect_bytes_dpapi(&cipher).ok()
+}
+
 fn read_fallback_secrets(data_dir: &Path) -> BTreeMap<String, String> {
     let path = secrets_path(data_dir);
-    fs::read_to_string(path)
-        .ok()
+    read_encrypted_fallback(&path)
+        .and_then(|bytes| String::from_utf8(bytes).ok())
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
 }
 
 fn write_fallback_secrets(data_dir: &Path, map: &BTreeMap<String, String>) -> Result<(), String> {
-    let json = serde_json::to_vec_pretty(map)
-        .map_err(|e| format!("Falha ao serializar chaves: {e}"))?;
-    atomic_write(&secrets_path(data_dir), &json)
+    if map.is_empty() {
+        let p = secrets_path(data_dir);
+        if p.exists() {
+            let _ = fs::remove_file(p);
+        }
+        return Ok(());
+    }
+    let json =
+        serde_json::to_vec_pretty(map).map_err(|e| format!("Falha ao serializar chaves: {e}"))?;
+    eprintln!("Aviso de segurança: usando armazenamento alternativo criptografado (DPAPI) porque o Gerenciador de Credenciais não aceitou gravação.");
+    write_encrypted_fallback(&secrets_path(data_dir), &json)
 }
 
 pub fn get_api_key(data_dir: &Path, slot: KeySlot) -> Option<String> {
@@ -299,5 +401,41 @@ pub fn get_all_key_status(data_dir: &Path) -> AllKeyStatus {
         gemini: key_status_for(data_dir, KeySlot::Gemini),
         google_client_secret: key_status_for(data_dir, KeySlot::GoogleClientSecret),
         elevenlabs: key_status_for(data_dir, KeySlot::Elevenlabs),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fallback_secret_storage_never_writes_plaintext() {
+        let dir =
+            std::env::temp_dir().join(format!("jarvis-secrets-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let secret_val = "sk-super-secret-value-do-not-store-plain-12345";
+        let mut map = BTreeMap::new();
+        map.insert("gemini".to_string(), secret_val.to_string());
+
+        let res = write_fallback_secrets(&dir, &map);
+        let disk_path = secrets_path(&dir);
+        if cfg!(windows) {
+            res.expect("DPAPI fallback should succeed on Windows");
+            let on_disk = fs::read_to_string(&disk_path).expect("encrypted file should exist");
+            assert!(on_disk.starts_with(DPAPI_PREFIX));
+            assert!(!on_disk.contains(secret_val));
+            let decoded = read_fallback_secrets(&dir);
+            assert_eq!(decoded.get("gemini").map(String::as_str), Some(secret_val));
+        } else {
+            assert!(res.is_err(), "Non-Windows without keyring must fail closed");
+            assert!(!disk_path.exists());
+        }
+
+        // Plaintext legacy file must never be accepted as secret material
+        let plain_path = dir.join("plain_probe.json");
+        fs::write(&plain_path, secret_val.as_bytes()).unwrap();
+        assert!(read_encrypted_fallback(&plain_path).is_none());
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

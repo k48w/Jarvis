@@ -127,8 +127,8 @@ pub async fn ensure_browser_webview(
         .ok_or_else(|| "Janela principal do J.A.R.V.I.S. não encontrada.".to_string())?;
 
     let url_str = normalize_browser_url(initial_url.unwrap_or(DEFAULT_URL));
-    let parsed = url::Url::parse(&url_str)
-        .map_err(|e| format!("URL inválida para o navegador: {e}"))?;
+    let parsed =
+        url::Url::parse(&url_str).map_err(|e| format!("URL inválida para o navegador: {e}"))?;
 
     let (x, y, w, h) = bounds.unwrap_or((40.0, 150.0, 860.0, 560.0));
     let wv = main_win
@@ -205,11 +205,7 @@ async fn probe_cdp_ready(_wv: &Webview) -> bool {
 }
 
 #[cfg(windows)]
-async fn cdp_call_on_webview(
-    wv: &Webview,
-    method: &str,
-    params: Value,
-) -> Result<Value, String> {
+async fn cdp_call_on_webview(wv: &Webview, method: &str, params: Value) -> Result<Value, String> {
     use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
     use windows::core::HSTRING;
 
@@ -242,10 +238,7 @@ async fn cdp_call_on_webview(
                     if hr.is_ok() {
                         let _ = tx.send(Ok(result));
                     } else {
-                        let _ = tx.send(Err(format!(
-                            "Erro CDP em {method_err_label}: {:?}",
-                            hr
-                        )));
+                        let _ = tx.send(Err(format!("Erro CDP em {method_err_label}: {:?}", hr)));
                     }
                 }
                 Ok(())
@@ -347,7 +340,8 @@ pub async fn sync_bounds(
         });
     }
 
-    let _wv = ensure_browser_webview(app, initial_url, Some((x, y, width, height)), Some(true)).await?;
+    let _wv =
+        ensure_browser_webview(app, initial_url, Some((x, y, width, height)), Some(true)).await?;
     get_status(app).await
 }
 
@@ -403,8 +397,7 @@ pub async fn get_status(app: &AppHandle) -> Result<BrowserStatus, String> {
 
 pub async fn navigate(app: &AppHandle, raw_url: &str) -> Result<BrowserInspectResult, String> {
     let url_str = normalize_browser_url(raw_url);
-    let parsed = url::Url::parse(&url_str)
-        .map_err(|e| format!("URL inválida '{raw_url}': {e}"))?;
+    let parsed = url::Url::parse(&url_str).map_err(|e| format!("URL inválida '{raw_url}': {e}"))?;
     match parsed.scheme() {
         "http" | "https" => {}
         _ => return Err("Apenas endereços http:// ou https:// são permitidos.".to_string()),
@@ -571,8 +564,10 @@ pub async fn inspect_page(
     app: &AppHandle,
     show_overlay: bool,
 ) -> Result<BrowserInspectResult, String> {
-    let script =
-        INSPECT_JS.replace("__SHOW_OVERLAY__", if show_overlay { "true" } else { "false" });
+    let script = INSPECT_JS.replace(
+        "__SHOW_OVERLAY__",
+        if show_overlay { "true" } else { "false" },
+    );
     let val = eval_js(app, &script).await?;
     serde_json::from_value::<BrowserInspectResult>(val)
         .map_err(|e| format!("Falha ao interpretar elementos da página: {e}"))
@@ -931,7 +926,11 @@ pub async fn type_text(
         "Texto '{}' digitado em '{}'{} · Página atual: {title} ({url})",
         text,
         target_desc,
-        if press_enter { " e Enter pressionado" } else { "" }
+        if press_enter {
+            " e Enter pressionado"
+        } else {
+            ""
+        }
     ))
 }
 
@@ -966,7 +965,9 @@ pub async fn scroll_page(
         st.as_ref().map(|i| i.title.as_str()).unwrap_or(""),
     );
 
-    Ok(format!("Rolagem '{direction}' aplicada. Posição Y atual: {y:.0}px."))
+    Ok(format!(
+        "Rolagem '{direction}' aplicada. Posição Y atual: {y:.0}px."
+    ))
 }
 
 pub fn format_inspect_for_llm(info: &BrowserInspectResult) -> String {
@@ -1026,8 +1027,9 @@ mod tests {
             normalize_browser_url("localhost:5173"),
             "http://localhost:5173"
         );
-        assert!(normalize_browser_url("preço rtx 4060")
-            .starts_with("https://www.google.com/search?q="));
+        assert!(
+            normalize_browser_url("preço rtx 4060").starts_with("https://www.google.com/search?q=")
+        );
     }
 
     #[test]

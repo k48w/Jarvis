@@ -270,6 +270,7 @@ export function DiffView({
               disabled={gitBusy}
               onClick={() => void refreshGit(projectPath)}
               title="Atualizar status Git"
+              aria-label="Atualizar status Git"
             >
               <RefreshCw size={12} />
             </button>

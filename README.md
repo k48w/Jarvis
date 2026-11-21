@@ -20,7 +20,8 @@ Assistente desktop nativo para Windows feito em Tauri 2, Rust e React.
 - **Visão de janelas e jogos** — lista processos abertos e captura janelas específicas com `PrintWindow` e `DXGI` (inclusive em segundo plano), além de ler prints e texto direto do `Ctrl+C`.
 - **Terminal ao vivo e Git nativo** — aba de terminal PowerShell com saída em streaming e cancelamento em tempo real, ferramentas `git_status`, `git_diff`, `git_log` e `git_commit`, além de diff colorido com desfazer em 1 clique.
 - **Skills (`/comando`) e rotinas agendadas** — macros reutilizáveis como `/briefing`, `/saude-pc`, `/foco` e `/git-review`, mais um agendador em segundo plano para tarefas diárias ou por intervalo.
-- **Celular conectado ao PC (QR Code)** — servidor local em Rust em **Ajustes → Celular** que pareia um app mobile instalável (PWA) com chat sincronizado, Deck de controle (volume, mídia, CPU/RAM, Skills em 1 toque), visualização de janelas/tela do PC e aprovação remota de segurança.
+- **Celular conectado ao PC (Jarvis Companion)** — servidor local em Rust desativado por padrão e limitado a `127.0.0.1` até ativação explícita do modo LAN em **Ajustes → Celular**. O pareamento usa código descartável de uso único trocado por sessão em cookie `HttpOnly` (`SameSite=Strict`), sem token em URLs ou EventSource, com revogação instantânea de sessões.
+- **Proteção de segredos e rede** — chaves e sessões OAuth priorizam o Gerenciador de Credenciais do Windows e usam criptografia DPAPI caso o keyring falhe (nunca texto puro); ferramentas web validam e bloqueiam IPs locais/privados e redirecionamentos SSRF.
 - **Agentes em paralelo** — até 3 tarefas rodando em segundo plano ao mesmo tempo; quando um agente termina, o próprio Jarvis fala e salva um resumo curto na conversa.
 - **Navegador embutido opcional** — WebView2 lado a lado com o chat quando você pede para abrir ou interagir com um site; buscas comuns acontecem silenciosamente em segundo plano.
 - **Presença no desktop** — atalho global `Alt + Space`, paleta de comandos `Ctrl + K` e mascote flutuante sempre no topo.
@@ -72,12 +73,13 @@ npm ci
 npm run tauri -- dev
 ```
 
-Para rodar os testes e gerar o build de produção:
+Para rodar todos os testes (frontend + backend Rust + protocolo Companion) e gerar o build de produção:
 
 ```powershell
-cargo test --manifest-path src-tauri/Cargo.toml
-npm run build
+npm test
 npm run tauri -- build
 ```
+
+> Nota: em builds anteriores sem suporte a rede local segura ou quando o Companion está desativado, o endpoint local responde `503 Service Unavailable`. Ao ativar o modo LAN, o tráfego usa HTTP na rede Wi-Fi local (sem TLS); ative apenas em redes privadas confiáveis.
 
 Documentação técnica adicional: [Arquitetura](docs/ARCHITECTURE.md) · [Áudio](docs/audio.md) · [Integrações nativas](docs/native.md) · [Segurança](SECURITY.md)

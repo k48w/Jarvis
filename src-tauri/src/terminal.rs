@@ -301,7 +301,9 @@ pub async fn run_and_collect_streaming(
             "Comando atingiu limite de {timeout_secs}s e foi encerrado.\n{preview}"
         ))
     } else if preview.trim().is_empty() {
-        Ok(format!("Comando finalizado (exit code {exit_code}) sem saída."))
+        Ok(format!(
+            "Comando finalizado (exit code {exit_code}) sem saída."
+        ))
     } else {
         Ok(format!("Exit code {exit_code}:\n{preview}"))
     }
