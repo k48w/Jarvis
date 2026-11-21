@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from 'react';
+import { Component, type ReactNode, useState, useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from 'react';
 import { cadence, contraction, overtone, respondingEnvelope, type CoreState } from './rhythm';
 import {
   AdditiveBlending,
@@ -352,7 +352,7 @@ function CoreScene({
   );
 }
 
-export default function Stage(props: StageProps) {
+function WebGLStage(props: StageProps) {
   const responseStart = useRef<number | null>(null);
   const pointerRef = useRef({ x: 0, y: 0 });
 
@@ -388,4 +388,35 @@ export default function Stage(props: StageProps) {
       <CoreScene {...props} responseStart={responseStart} pointerRef={pointerRef} />
     </Canvas>
   );
+}
+
+
+function StageFallback() {
+  return (
+    <div className="stage-fallback" role="status">
+      <img src="/hero-orb.jpg" alt="Esfera do Jarvis em modo visual simplificado" />
+      <p><strong>Modo visual simplificado</strong><br />
+        O 3D está indisponível neste navegador. Você pode continuar explorando a interface.
+      </p>
+    </div>
+  );
+}
+
+class StageBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  render() { return this.state.failed ? <StageFallback /> : this.props.children; }
+}
+
+export default function Stage(props: StageProps) {
+  const [supported] = useState(() => {
+    try {
+      const canvas = document.createElement('canvas');
+      const gl = canvas.getContext('webgl2');
+      if (!gl) return false;
+      gl.getExtension('WEBGL_lose_context')?.loseContext();
+      return true;
+    } catch { return false; }
+  });
+  return supported ? <StageBoundary><WebGLStage {...props} /></StageBoundary> : <StageFallback />;
 }

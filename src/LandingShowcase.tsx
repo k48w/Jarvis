@@ -372,21 +372,19 @@ export function LandingShowcase({
         <div className="lp-hero-copy">
           <div className="lp-kicker-pill">
             <span className="lp-live-dot" />
-            <span>TAURI 2 · RUST WIN32 NATIVO · REACT 19 · THREE.JS GLSL</span>
+            <span>ASSISTENTE PESSOAL · WINDOWS 10 E 11</span>
           </div>
 
           <h1>
-            Não é só um chat.
+            Seu assistente de voz para
             <br />
-            <span>É um copiloto vivo no seu Windows.</span>
+            <span>jogar, navegar e programar no Windows.</span>
           </h1>
 
           <p className="lp-hero-lead">
-            O <strong>J.A.R.V.I.S. V8.0 — The Singularity Edition</strong> une um núcleo de
-            plasma 3D reativo à voz, mascote animado em toda a área de trabalho, comando de
-            voz <code>&ldquo;Ei, Jarvis&rdquo;</code> nativo em Rust, visão inteligente que
-            enxerga seu jogo mesmo atrás do navegador, Chromium 60fps embutido e edição de
-            código com diff visual.
+            Converse com o Jarvis, peça ajuda com o que aparece na tela e acompanhe
+            suas tarefas em uma única interface. Ative por voz com <code>&ldquo;Ei, Jarvis&rdquo;</code>
+            e mantenha seu assistente por perto enquanto usa o Windows.
           </p>
 
           <div className="lp-hero-cta-row">
@@ -410,25 +408,29 @@ export function LandingShowcase({
             >
               <Sparkles />
               <div>
-                <strong>Abrir Simulador 3D ao Vivo</strong>
-                <small>Teste o cockpit direto no navegador</small>
+                <strong>Explorar demonstração visual</strong>
+                <small>Conheça a interface no navegador</small>
               </div>
               <ArrowRight />
             </button>
           </div>
 
+          <p className="lp-demo-notice">
+            <strong>Demonstração visual no navegador.</strong> IA, voz e controle do Windows
+            estão disponíveis no aplicativo desktop, com os serviços configurados.
+          </p>
           <div className="lp-hero-metrics">
             <div className="lp-metric">
-              <strong>100% Rust</strong>
+              <strong>Integrações em Rust</strong>
               <span>DXGI, PrintWindow, waveIn &amp; SendInput sem PowerShell</span>
             </div>
             <div className="lp-metric">
-              <strong>0% Rede</strong>
+              <strong>Silêncio sem tráfego</strong>
               <span>Durante o silêncio com VAD local no Wake Word</span>
             </div>
             <div className="lp-metric">
-              <strong>60 FPS</strong>
-              <span>Shaders GLSL + Child WebView2 acelerado por GPU</span>
+              <strong>Visual acelerado</strong>
+              <span>Fluidez conforme a GPU e a configuração do computador</span>
             </div>
           </div>
         </div>
@@ -533,10 +535,10 @@ export function LandingShowcase({
       <section id="pilares" className="lp-section">
         <div className="lp-section-head">
           <span className="lp-eyebrow">ENGENHARIA DE PONTA A PONTA</span>
-          <h2>Quatro sistemas nativos que nenhum assistente web tem</h2>
+          <h2>Voz, visão, navegação e código no seu desktop</h2>
           <p>
-            Projetado em Rust puro diretamente sobre as APIs Win32 do Windows 10/11 para
-            enxergar, ouvir, navegar e programar sem bloqueios de antivírus nem travamentos.
+            Integrações nativas em Rust sobre as APIs Win32 do Windows 10/11 para
+            integrar voz, captura de janelas, navegação e edição de código. A compatibilidade varia conforme o aplicativo e as permissões do Windows.
           </p>
         </div>
 
@@ -995,7 +997,7 @@ export function LandingShowcase({
       <section id="comparativo" className="lp-section">
         <div className="lp-section-head">
           <span className="lp-eyebrow">COMPARATIVO TÉCNICO</span>
-          <h2>Por que o J.A.R.V.I.S. V8.0 está em outro patamar</h2>
+          <h2>Conheça as integrações do J.A.R.V.I.S. V8.0</h2>
         </div>
 
         <div className="lp-table-wrap">
@@ -1018,7 +1020,7 @@ export function LandingShowcase({
               <tr>
                 <td>Microfone &amp; Wake Word</td>
                 <td className="highlight">
-                  <strong>Rust Win32 <code>waveIn</code> nativo</strong> (funciona minimizado e sem erro de permissão)
+                  <strong>Rust Win32 <code>waveIn</code> nativo</strong> (sujeito às permissões de microfone do Windows)
                 </td>
                 <td>Depende do navegador / falha em WebViews</td>
               </tr>
@@ -1085,7 +1087,7 @@ export function LandingShowcase({
             </div>
             <div className="lp-sysreq-box">
               <strong>Requisitos Mínimos:</strong> Windows 10 ou 11 (x64) · WebView2 Runtime ·
-              40 MB de RAM livre · GPU compatível com WebGL2 / DirectX 11.
+              GPU compatível com WebGL2 / DirectX 11. O consumo de memória varia conforme os recursos em uso.
             </div>
           </div>
 
@@ -1101,12 +1103,11 @@ export function LandingShowcase({
               </p>
             </details>
             <details className="lp-faq-item">
-              <summary>Por que o antivírus não bloqueia a visão de tela do J.A.R.V.I.S.?</summary>
+              <summary>Como funciona a captura de tela e sua compatibilidade?</summary>
               <p>
-                Porque 100% da captura e controle é feita em <strong>Rust compilado nativo</strong>{" "}
-                usando <code>PrintWindow</code>, <code>DXGI Desktop Duplication</code> e{" "}
-                <code>SendInput</code> — sem executar scripts ocultos de PowerShell que
-                disparam alertas do Windows Defender (AMSI).
+                A captura e o controle são implementados em <strong>Rust</strong>{" "}
+                com <code>PrintWindow</code>, <code>DXGI Desktop Duplication</code> e{" "}
+                <code>SendInput</code> — sem depender de PowerShell. Isso não garante ausência de alertas: a compatibilidade depende do antivírus, das permissões e do aplicativo capturado.
               </p>
             </details>
             <details className="lp-faq-item">
@@ -1154,7 +1155,7 @@ export function LandingShowcase({
                 <Play />
                 <div>
                   <strong>Testar Simulador 3D Agora</strong>
-                  <small>Abrir interface completa no navegador</small>
+                  <small>Prévia visual; IA disponível no app desktop</small>
                 </div>
               </button>
 
