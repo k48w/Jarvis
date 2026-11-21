@@ -4,9 +4,9 @@
 
 # Jarvis
 
-Assistente desktop nativo para Windows feito em Tauri 2, Rust e React.
+Assistente desktop nativo para Windows construído em **Tauri 2, Rust (Win32 + Tokio) e React 19**.
 
-[Baixar para Windows](https://github.com/k48w/Jarvis/releases/tag/v8.0.0) · [Prévia Web](https://jarvis-cinematic.vercel.app/) · [Arquitetura](docs/ARCHITECTURE.md) · [Guia do Código](CONTRIBUTING.md)
+[Baixar para Windows (.exe)](https://github.com/k48w/Jarvis/releases/latest) · [Site & Prévia Web](https://jarvis-cinematic.vercel.app/) · [Documentação](docs/README.md) · [Segurança](SECURITY.md) · [Guia do Código](CONTRIBUTING.md)
 
 <img src="docs/assistant-desktop.png" width="100%" alt="Interface principal do Jarvis no Windows" />
 
@@ -14,59 +14,69 @@ Assistente desktop nativo para Windows feito em Tauri 2, Rust e React.
 
 ---
 
-## O que o Jarvis faz
+## Principais Recursos
 
-- **Voz nativa no Windows** — captura via Win32 `waveIn` (16 kHz) com detecção de silêncio local (VAD), ativação por `"Ei, Jarvis"`, modo mãos-livres, transcrição (ElevenLabs Scribe ou Gemini) e voz ElevenLabs com cache em disco.
-- **Visão de janelas e jogos** — lista processos abertos e captura janelas específicas com `PrintWindow` e `DXGI` (inclusive em segundo plano), além de ler prints e texto direto do `Ctrl+C`.
-- **Terminal ao vivo e Git nativo** — aba de terminal PowerShell com saída em streaming e cancelamento em tempo real, ferramentas `git_status`, `git_diff`, `git_log` e `git_commit`, além de diff colorido com desfazer em 1 clique.
-- **Skills (`/comando`) e rotinas agendadas** — macros reutilizáveis como `/briefing`, `/saude-pc`, `/foco` e `/git-review`, mais um agendador em segundo plano para tarefas diárias ou por intervalo.
-- **Base de Conhecimento Local (RAG em Rust)** — indexa pastas de projetos, códigos e documentações locais em blocos com numeração exata de linhas e busca híbrida BM25 (`kb_index_path`, `kb_search`, `kb_list`, `kb_remove` + aba **Base RAG** no painel de conversas), ignorando automaticamente `.env` e arquivos de segredos.
-- **Auto-Updater nativo via GitHub Releases** — verifica novas versões direto em **Ajustes → Sistema**, valida a origem HTTPS e o cabeçalho executável (`MZ`) e baixa/inicia o instalador `.exe` atualizado em 1 clique com barra de progresso.
-- **Celular conectado ao PC dentro e fora do Wi-Fi (Jarvis Companion)** — servidor local em Rust desativado por padrão e limitado a `127.0.0.1` até ativação explícita em **Ajustes → Celular**. Suporta **Wi-Fi Local (LAN)**, detecção automática de **Tailscale VPN (`100.x.y.z`)** para uso no 4G/5G fora de casa e **Túnel HTTPS** (Tailscale Serve/Funnel ou Cloudflare Tunnel). O pareamento usa código descartável de uso único trocado por sessão em cookie `HttpOnly` (`SameSite=Strict`, com flag `Secure` automática em HTTPS) e alertas no celular para aprovações 2FA.
-- **Proteção de segredos e rede** — chaves e sessões OAuth priorizam o Gerenciador de Credenciais do Windows e usam criptografia DPAPI caso o keyring falhe (nunca texto puro); ferramentas web validam e bloqueiam IPs locais/privados e redirecionamentos SSRF.
-- **Agentes em paralelo** — até 3 tarefas rodando em segundo plano ao mesmo tempo; quando um agente termina, o próprio Jarvis fala e salva um resumo curto na conversa.
-- **Navegador embutido opcional** — WebView2 lado a lado com o chat quando você pede para abrir ou interagir com um site; buscas comuns acontecem silenciosamente em segundo plano.
-- **Presença no desktop** — atalho global `Alt + Space`, paleta de comandos `Ctrl + K` e mascote flutuante sempre no topo.
+### Produtividade, Código & Conhecimento
+- **Base de Conhecimento Local (RAG em Rust)** — indexa pastas de projetos, códigos e documentações locais com numeração exata de linhas (`start_line..=end_line`) e busca híbrida **BM25 + correspondência exata** (`kb_index_path`, `kb_search`, `kb_list`, `kb_remove` + aba **Base RAG**), bloqueando automaticamente `.env`, `.ssh`, chaves privadas e pastas de sistema.
+- **Terminal ao vivo e Git nativo** — terminal PowerShell com saída em streaming e cancelamento em tempo real (`run_terminal`), barra Git integrada (`git_status`, `git_diff`, `git_log`, `git_commit`) e diff colorido com desfazer em 1 clique.
+- **Agentes em paralelo** — até 3 subagentes rodando em segundo plano ao mesmo tempo (Pesquisador, Programador, Automação); ao finalizar, o Jarvis fala e salva o resumo diretamente na conversa.
+- **Skills (`/comando`) e rotinas agendadas** — macros reutilizáveis como `/briefing`, `/saude-pc`, `/foco` e `/git-review`, mais agendador em background (horário diário `HH:MM` ou por intervalo).
+
+### Voz, Visão & Presença no Windows
+- **Voz nativa sem desperdício de créditos** — captura via Win32 `waveIn` (16 kHz) com detecção de silêncio local (VAD), Wake Word `"Ei, Jarvis"`, modo mãos-livres, transcrição (ElevenLabs Scribe / Gemini) e fala ElevenLabs com cache SHA-256 em disco.
+- **Visão de janelas e jogos** — lista janelas abertas e captura alvos específicos com `PrintWindow` e fallback **DXGI Desktop Duplication** (protegido contra concorrência por `ScreenCaptureGuard`), além de ler prints e texto do `Ctrl+C`.
+- **Navegador integrado (WebView2 + CDP)** — painel acoplado lado a lado quando você pede para abrir ou interagir com uma página; buscas comuns acontecem silenciosamente em segundo plano.
+- **Atalhos e Mascote** — chamada instantânea por `Alt + Space`, paleta de comandos `Ctrl + K` e mascote flutuante sempre no topo.
+
+### Celular Conectado & Atualizações
+- **Jarvis Companion (Wi-Fi, Tailscale 4G/5G & Túnel HTTPS)** — PWA mobile servido diretamente em Rust com Chat, Deck de Skills, telemetria CPU/RAM, tela do PC e aprovação 2FA. Suporta **Wi-Fi Local**, detecção automática de **Tailscale VPN (`100.x.y.z`)** para uso no 4G/5G fora de casa e **Túnel HTTPS** (Tailscale Serve/Funnel ou Cloudflare Tunnel). Veja o guia em [docs/COMPANION.md](docs/COMPANION.md).
+- **Auto-Updater 1-Clique via GitHub Releases** — verifica novas versões em **Ajustes → Sistema**, valida a origem HTTPS em cada redirecionamento, checa a assinatura PE (`MZ`) + SHA-256 e inicia o instalador `.exe` atualizado automaticamente.
+
+### Segurança por Padrão
+- **Segredos protegidos**: chaves e sessões OAuth usam o Gerenciador de Credenciais do Windows (`keyring`) com fallback cifrado por usuário via **Windows DPAPI (`DPAPI1:`)** — nunca texto puro.
+- **Companion endurecido**: desativado (`503`) e restrito a `127.0.0.1` por padrão; pareamento de uso único trocado por cookie `HttpOnly; SameSite=Strict` (TTL 8h, `Secure` automático em HTTPS), rotação automática após 5 tentativas inválidas (`429`), cabeçalhos defensivos e limites contra Slowloris/flood.
+- **SSRF Guard**: ferramentas web resolvem DNS e bloqueiam IPs privados, loopback, link-local, CGNAT e redirecionamentos internos.
 
 ---
 
 ## Instalação (Windows 10 / 11 x64)
 
-1. Baixe o instalador em [GitHub Releases](https://github.com/k48w/Jarvis/releases/tag/v8.0.0):
-   - **Instalador:** [JARVIS_8.0.0_x64-setup.exe](https://github.com/k48w/Jarvis/releases/download/v8.0.0/JARVIS_8.0.0_x64-setup.exe)
+1. Baixe a versão mais recente em [GitHub Releases](https://github.com/k48w/Jarvis/releases/latest):
+   - **Instalador (~7,9 MB):** [JARVIS_8.0.0_x64-setup.exe](https://github.com/k48w/Jarvis/releases/download/v8.0.0/JARVIS_8.0.0_x64-setup.exe)
    - **Executável portátil:** [JARVIS.exe](https://github.com/k48w/Jarvis/releases/download/v8.0.0/JARVIS.exe)
-2. Abra **Ajustes → IA** e conecte sua conta **ChatGPT (OAuth)** ou **Google Gemini (API Key / OAuth)**.
-3. Opcional: em **Ajustes → Voz**, adicione sua chave **ElevenLabs** e escolha o microfone.
+2. Abra **Ajustes → IA** e conecte sua conta **ChatGPT (OAuth 2.0 + PKCE)** ou **Google Gemini (API Key / OAuth)**.
+3. *(Opcional)* Em **Ajustes → Voz**, configure sua chave **ElevenLabs** e escolha o microfone.
+4. Para futuras atualizações, use **Ajustes → Sistema → Verificar Atualização**.
 
-> O projeto é open-source sob licença MIT. Os provedores de IA e voz usam suas próprias contas/chaves e não estão incluídos no binário.
+> Projeto open-source sob licença MIT. As contas e chaves de IA/voz são configuradas pelo próprio usuário e não acompanham o binário.
 
 ---
 
-## Modos de permissão
+## Modos de Permissão
 
 | Modo | Comportamento |
 | :--- | :--- |
-| **Somente Conversa** | Desativa ações locais no PC e leitura de hardware. |
-| **Revisão Automática** | Permite leitura e buscas; pede aprovação antes de executar comandos ou alterar arquivos. |
-| **Permissão Total** | Executa as ferramentas automaticamente, mantendo bloqueios contra comandos destrutivos e pastas críticas do Windows. |
+| **Somente Conversa (`safe`)** | Desativa ações locais no PC, leitura de hardware e escrita em disco. |
+| **Revisão Automática (`review`)** | Permite leitura e buscas; pede aprovação 2FA (desktop ou celular) antes de rodar comandos ou alterar arquivos. |
+| **Permissão Total (`auto`)** | Executa ferramentas automaticamente, mantendo bloqueios contra pastas críticas do Windows e comandos destrutivos. |
 
 ---
 
-## Atalhos
+## Atalhos de Teclado
 
 | Atalho | Ação |
 | :--- | :--- |
-| `Alt + Space` | Mostrar ou ocultar o Jarvis (configurável) |
-| `Ctrl + K` | Abrir paleta de comandos |
-| `F11` / `Alt + Enter` | Alternar tela cheia |
+| `Alt + Space` | Mostrar ou ocultar o Jarvis sobre qualquer app ou jogo (configurável) |
+| `Ctrl + K` | Abrir Paleta de Comandos Rápidos |
+| `F11` / `Alt + Enter` | Alternar modo tela cheia / imersivo |
 | `Ctrl + V` | Colar print como anexo na conversa |
 | `Esc` | Fechar painéis ou sair do modo tela cheia |
 
 ---
 
-## Desenvolvimento local
+## Desenvolvimento Local & Qualidade
 
-Requisitos: Windows x64, Node.js 22+, Rust stable (MSVC), Visual Studio C++ Build Tools e WebView2 Runtime.
+Requisitos: **Windows 10/11 x64**, **Node.js 22+**, **Rust stable (MSVC)**, Visual Studio C++ Build Tools e WebView2 Runtime.
 
 ```powershell
 git clone https://github.com/k48w/Jarvis.git
@@ -75,13 +85,25 @@ npm ci
 npm run tauri -- dev
 ```
 
-Para rodar todos os testes (frontend + backend Rust + protocolo Companion) e gerar o build de produção:
+Para rodar formatação, linter estrito (zero warnings), todos os testes e gerar os binários de produção:
 
 ```powershell
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 npm test
 npm run tauri -- build
 ```
 
-> Nota: em builds anteriores sem suporte a rede local segura ou quando o Companion está desativado, o endpoint local responde `503 Service Unavailable`. Ao ativar o modo LAN, o tráfego usa HTTP na rede Wi-Fi local (sem TLS); ative apenas em redes privadas confiáveis.
+---
 
-Documentação técnica adicional: [Guia do Código (CONTRIBUTING)](CONTRIBUTING.md) · [Arquitetura](docs/ARCHITECTURE.md) · [Áudio](docs/audio.md) · [Integrações nativas](docs/native.md) · [Segurança](SECURITY.md)
+## Documentação Organizada
+
+| Guia | Conteúdo |
+| :--- | :--- |
+| [Central de Docs](docs/README.md) | Índice completo de toda a documentação do repositório |
+| [Guia do Código](CONTRIBUTING.md) | Mapa de todos os arquivos (`src/` e `src-tauri/src/`) e receitas *"Onde mexer para..."* |
+| [Arquitetura](docs/ARCHITECTURE.md) | Diagramas Mermaid, pipeline Win32/DXGI, áudio `waveIn`, RAG e Auto-Updater |
+| [Jarvis Companion](docs/COMPANION.md) | Pareamento via Wi-Fi Local, Tailscale 4G/5G e Túnel HTTPS |
+| [Segurança](SECURITY.md) | Política de segurança, DPAPI, SSRF, proteção do RAG e do Updater |
+| [Build & Checksums](docs/native.md) | Empacotamento NSIS, WebView2 e hashes SHA-256 dos binários |
+| [Changelog](CHANGELOG.md) | Histórico de versões e auditorias |

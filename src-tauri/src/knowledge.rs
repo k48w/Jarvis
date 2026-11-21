@@ -68,9 +68,14 @@ const ALLOWED_EXTENSIONS: &[&str] = &[
     "log",
 ];
 
-/// Diretórios ignorados automaticamente ao indexar uma árvore de projeto.
+/// Diretórios ignorados automaticamente ao indexar uma árvore de projeto (build, VCS e cofres de credenciais).
 const IGNORED_DIRS: &[&str] = &[
     ".git",
+    ".ssh",
+    ".aws",
+    ".gnupg",
+    ".azure",
+    ".kube",
     "node_modules",
     "target",
     "dist",
@@ -195,6 +200,12 @@ pub fn index_path(
     }
     let canonical = fs::canonicalize(&target).unwrap_or_else(|_| target.clone());
     let clean_path_str = strip_verbatim_prefix(&canonical.to_string_lossy());
+    if is_blocked_sensitive_path(&clean_path_str) {
+        return Err(
+            "Indexação bloqueada por segurança: diretório crítico do sistema ou pasta de credenciais (.ssh/.aws/.gnupg)."
+                .to_string(),
+        );
+    }
 
     let default_name = canonical
         .file_name()
@@ -416,6 +427,20 @@ fn strip_verbatim_prefix(path: &str) -> String {
     path.strip_prefix(r"\\?\").unwrap_or(path).to_string()
 }
 
+fn is_blocked_sensitive_path(clean_path: &str) -> bool {
+    let norm = clean_path.replace('\\', "/").to_ascii_lowercase();
+    if norm == "c:/windows"
+        || norm.starts_with("c:/windows/")
+        || norm.starts_with("c:/program files/")
+        || norm.starts_with("c:/program files (x86)/")
+        || norm.contains("/microsoft/protect")
+    {
+        return true;
+    }
+    norm.split('/')
+        .any(|seg| matches!(seg, ".ssh" | ".aws" | ".gnupg" | ".azure" | ".kube"))
+}
+
 fn is_indexable_file(path: &Path) -> bool {
     let Ok(meta) = fs::metadata(path) else {
         return false;
@@ -423,17 +448,35 @@ fn is_indexable_file(path: &Path) -> bool {
     if !meta.is_file() || meta.len() == 0 || meta.len() > MAX_FILE_BYTES {
         return false;
     }
+    let clean = strip_verbatim_prefix(&path.to_string_lossy());
+    if is_blocked_sensitive_path(&clean) {
+        return false;
+    }
     let file_name = path
         .file_name()
         .map(|n| n.to_string_lossy().to_lowercase())
         .unwrap_or_default();
 
-    // Nunca indexar arquivos de segredo ou chaves privadas
+    // Nunca indexar arquivos de segredo, tokens OAuth ou chaves privadas
     if file_name == ".env"
         || file_name.starts_with(".env.")
         || file_name == "secrets.json"
+        || file_name == "credentials.json"
+        || file_name == ".npmrc"
+        || file_name == ".pypirc"
+        || file_name == ".netrc"
+        || file_name.starts_with("id_rsa")
+        || file_name.starts_with("id_ed25519")
+        || file_name.starts_with("id_ecdsa")
+        || file_name.starts_with("client_secret")
+        || (file_name.contains("oauth") && file_name.ends_with(".json"))
         || file_name.ends_with(".pem")
         || file_name.ends_with(".key")
+        || file_name.ends_with(".pfx")
+        || file_name.ends_with(".p12")
+        || file_name.ends_with(".kdbx")
+        || file_name.ends_with(".jks")
+        || file_name.ends_with(".keystore")
     {
         return false;
     }
@@ -551,8 +594,16 @@ mod tests {
             "pub fn inicializar_quantum_flux(freq_hz: u32) -> bool {\n    freq_hz == 144\n}\n",
         )
         .unwrap();
-        // Segredos (.env) devem ser ignorados automaticamente
+        // Segredos (.env, credentials.json e .ssh/id_rsa) devem ser ignorados automaticamente
         fs::write(docs_dir.join(".env"), "SECRET_KEY=super_secreto_123").unwrap();
+        fs::write(
+            docs_dir.join("credentials.json"),
+            "{\"token\":\"tok_segredo\"}",
+        )
+        .unwrap();
+        let ssh_dir = docs_dir.join(".ssh");
+        fs::create_dir_all(&ssh_dir).unwrap();
+        fs::write(ssh_dir.join("id_rsa.txt"), "PRIVATE_SSH_KEY_XYZ").unwrap();
 
         let summary = index_path(&data_dir, &docs_dir.to_string_lossy(), None).unwrap();
         assert_eq!(summary.file_count, 2);
@@ -562,9 +613,11 @@ mod tests {
         assert!(!hits.is_empty());
         assert!(hits[0].snippet.contains("QuantumFlux"));
 
-        // Garante que o arquivo .env nunca foi indexado
-        let env_hits = search_knowledge(&data_dir, "super_secreto_123", 5, None);
-        assert!(env_hits.is_empty());
+        // Garante que arquivos sensíveis e pastas de credenciais nunca foram indexados
+        assert!(search_knowledge(&data_dir, "super_secreto_123", 5, None).is_empty());
+        assert!(search_knowledge(&data_dir, "tok_segredo", 5, None).is_empty());
+        assert!(search_knowledge(&data_dir, "PRIVATE_SSH_KEY_XYZ", 5, None).is_empty());
+        assert!(index_path(&data_dir, &ssh_dir.to_string_lossy(), None).is_err());
 
         // Remover a fonte limpa a lista e os chunks
         assert!(remove_source(&data_dir, &summary.id).unwrap());

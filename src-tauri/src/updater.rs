@@ -7,6 +7,7 @@
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
 use std::fs;
 use std::io::Write;
@@ -226,8 +227,19 @@ pub async fn download_and_launch_installer(
         },
     );
 
+    let redirect_policy = reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 5 {
+            return attempt.error("Muitos redirecionamentos no download da atualização.");
+        }
+        match validate_release_asset_url(attempt.url().as_str()) {
+            Ok(_) => attempt.follow(),
+            Err(err) => attempt.error(err),
+        }
+    });
+
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(180))
+        .redirect(redirect_policy)
         .user_agent(format!(
             "Jarvis-Desktop-Updater/{}",
             env!("CARGO_PKG_VERSION")
@@ -256,6 +268,7 @@ pub async fn download_and_launch_installer(
     let mut file = fs::File::create(&dest_path)
         .map_err(|e| format!("Falha ao criar arquivo do instalador: {e}"))?;
     let mut first_two_bytes = Vec::with_capacity(2);
+    let mut hasher = Sha256::new();
 
     let mut stream = resp.bytes_stream();
     while let Some(chunk_res) = stream.next().await {
@@ -267,6 +280,7 @@ pub async fn download_and_launch_installer(
                 }
             }
         }
+        hasher.update(&chunk);
         file.write_all(&chunk)
             .map_err(|e| format!("Erro ao gravar instalador em disco: {e}"))?;
         downloaded_bytes += chunk.len() as u64;
@@ -307,14 +321,17 @@ pub async fn download_and_launch_installer(
         },
     );
 
+    let sha256_hex = format!("{:X}", hasher.finalize());
+
     std::process::Command::new(&dest_path)
         .spawn()
         .map_err(|e| format!("Falha ao iniciar o instalador '{}': {e}", safe_name))?;
 
     Ok(format!(
-        "Instalador '{}' baixado ({:.2} MB) e iniciado.",
+        "Instalador '{}' baixado ({:.2} MB, SHA-256: {}…) e iniciado.",
         safe_name,
-        downloaded_bytes as f64 / (1024.0 * 1024.0)
+        downloaded_bytes as f64 / (1024.0 * 1024.0),
+        &sha256_hex[..16]
     ))
 }
 

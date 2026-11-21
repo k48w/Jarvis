@@ -404,7 +404,7 @@ export function LandingShowcase({
               <Download />
               <div>
                 <strong>Baixar para Windows x64</strong>
-                <small>Instalador .exe · ~7.8 MB</small>
+                <small>Instalador .exe · ~7.9 MB</small>
               </div>
             </a>
 
@@ -1076,7 +1076,7 @@ export function LandingShowcase({
               <tr>
                 <td>Tamanho do Instalador</td>
                 <td className="highlight">
-                  <strong>~7.8 MB (Tauri 2 + Rust)</strong>
+                  <strong>~7.9 MB (Tauri 2 + Rust)</strong>
                 </td>
                 <td>150 MB – 300 MB (Electron)</td>
               </tr>
@@ -1144,6 +1144,17 @@ export function LandingShowcase({
                 Zero. A detecção de atividade de voz (VAD) roda localmente na sua CPU em Rust
                 (<code>waveIn 16kHz</code>). Ele só envia o trecho de 1–3 segundos para o
                 ElevenLabs Scribe / Gemini quando você realmente fala.
+              </p>
+            </details>
+            <details className="lp-faq-item">
+              <summary>Como funciona a segurança das chaves, do RAG local e do acesso pelo celular?</summary>
+              <p>
+                Chaves e tokens ficam no <strong>Gerenciador de Credenciais do Windows</strong>{" "}
+                (com fallback cifrado via <strong>Windows DPAPI</strong>, nunca em texto puro). A
+                Base RAG bloqueia automaticamente <code>.env</code>, <code>.ssh</code> e pastas do
+                sistema. O <strong>Jarvis Companion</strong> começa desligado por padrão, suporta
+                Wi-Fi Local, <strong>Tailscale 4G/5G</strong> e <strong>Túnel HTTPS</strong>, e
+                rotaciona o código automaticamente após 5 tentativas inválidas.
               </p>
             </details>
           </div>

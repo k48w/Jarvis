@@ -36,6 +36,8 @@ const MAX_HEADER_BYTES: usize = 16 * 1024;
 const MAX_BODY_BYTES: usize = 256 * 1024;
 const MAX_CONCURRENT_CONNS: usize = 32;
 const MAX_SSE_CLIENTS: usize = 6;
+const MAX_ACTIVE_SESSIONS: usize = 16;
+const MAX_PAIR_FAILURES: usize = 5;
 const HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 const BODY_TIMEOUT: Duration = Duration::from_secs(10);
 const SESSION_TTL: Duration = Duration::from_secs(8 * 60 * 60);
@@ -61,6 +63,7 @@ pub struct CompanionState {
     pub enabled: AtomicBool,
     pub lan_enabled: AtomicBool,
     pub pairing_code: RwLock<String>,
+    pub failed_pair_attempts: AtomicUsize,
     pub sessions: RwLock<HashMap<String, Instant>>,
     pub external_url: RwLock<Option<String>>,
     pub port: AtomicU16,
@@ -116,6 +119,7 @@ impl CompanionState {
             enabled: AtomicBool::new(false),
             lan_enabled: AtomicBool::new(false),
             pairing_code: RwLock::new(generate_pairing_code()),
+            failed_pair_attempts: AtomicUsize::new(0),
             sessions: RwLock::new(HashMap::new()),
             external_url: RwLock::new(None),
             port: AtomicU16::new(47821),
@@ -147,6 +151,7 @@ impl CompanionState {
             let mut code_guard = self.pairing_code.write().await;
             *code_guard = next.clone();
         }
+        self.failed_pair_attempts.store(0, Ordering::SeqCst);
         let _ = self
             .events_tx
             .send(json!({ "event": "session_revoked" }).to_string());
@@ -437,7 +442,7 @@ async fn write_http_response(
     body: &[u8],
 ) -> std::io::Result<()> {
     let mut head = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n",
         body.len()
     );
     for (k, v) in extra_headers {
@@ -551,22 +556,44 @@ pub(crate) async fn handle_client_core(
     if req.method == "POST" && req.path == "/api/pair" {
         let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
         let submitted = normalize_code(body["code"].as_str().unwrap_or(""));
-        let paired = {
+        let (paired, rotated_on_bruteforce) = {
             let mut code_guard = companion.pairing_code.write().await;
             if !submitted.is_empty() && submitted == *code_guard {
                 *code_guard = generate_pairing_code();
-                true
+                companion.failed_pair_attempts.store(0, Ordering::SeqCst);
+                (true, false)
             } else {
-                false
+                let fails = companion
+                    .failed_pair_attempts
+                    .fetch_add(1, Ordering::SeqCst)
+                    + 1;
+                if fails >= MAX_PAIR_FAILURES {
+                    *code_guard = generate_pairing_code();
+                    companion.failed_pair_attempts.store(0, Ordering::SeqCst);
+                    (false, true)
+                } else {
+                    (false, false)
+                }
             }
         };
         if !paired {
+            let (status, payload) = if rotated_on_bruteforce {
+                (
+                    "429 Too Many Requests",
+                    br#"{"error":"Muitas tentativas invalidas. Codigo de pareamento rotacionado por seguranca."}"#.as_slice(),
+                )
+            } else {
+                (
+                    "401 Unauthorized",
+                    br#"{"error":"Codigo de pareamento invalido ou expirado"}"#.as_slice(),
+                )
+            };
             let _ = write_http_response(
                 &mut stream,
-                "401 Unauthorized",
+                status,
                 "application/json; charset=utf-8",
                 &[],
-                br#"{"error":"Codigo de pareamento invalido ou expirado"}"#,
+                payload,
             )
             .await;
             return;
@@ -574,6 +601,16 @@ pub(crate) async fn handle_client_core(
         let session_id = Uuid::new_v4().simple().to_string();
         {
             let mut sessions = companion.sessions.write().await;
+            sessions.retain(|_, issued| issued.elapsed() < SESSION_TTL);
+            if sessions.len() >= MAX_ACTIVE_SESSIONS {
+                if let Some(oldest_key) = sessions
+                    .iter()
+                    .min_by_key(|(_, issued)| *issued)
+                    .map(|(k, _)| k.clone())
+                {
+                    sessions.remove(&oldest_key);
+                }
+            }
             sessions.insert(session_id.clone(), Instant::now());
         }
         // Quando o pareamento ocorre via túnel HTTPS (Tailscale Serve/Funnel, Cloudflare Tunnel),
@@ -1376,6 +1413,24 @@ mod tests {
         let r_https_pair = send_raw_http(addr, &https_pair_req).await;
         assert!(r_https_pair.starts_with("HTTP/1.1 200"));
         assert!(r_https_pair.contains("; Secure"));
+        assert!(r_https_pair.contains("X-Frame-Options: DENY"));
+        assert!(r_https_pair.contains("Referrer-Policy: no-referrer"));
+
+        // 8. Brute-force protection: 5 invalid attempts auto-rotate the pairing code and return 429
+        let code_before = companion.pairing_code.read().await.clone();
+        let bad_body = json!({ "code": "00000000" }).to_string();
+        let bad_req = format!(
+            "POST /api/pair HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{bad_body}",
+            bad_body.len()
+        );
+        for _ in 0..4 {
+            let r_fail = send_raw_http(addr, &bad_req).await;
+            assert!(r_fail.starts_with("HTTP/1.1 401"));
+        }
+        let r_rot = send_raw_http(addr, &bad_req).await;
+        assert!(r_rot.starts_with("HTTP/1.1 429"));
+        let code_after = companion.pairing_code.read().await.clone();
+        assert_ne!(code_before, code_after);
 
         assert_eq!(
             normalize_external_url("https://meu-pc.tail1234.ts.net/").unwrap(),
