@@ -902,52 +902,93 @@ fn build_concise_agent_speech(agent_name: &str, raw_output: &str) -> (String, St
         clean_lines.join(" ")
     };
 
-    let card_summary: String = if clean_lines.len() <= 3 {
-        clean_lines.join("\n")
-    } else {
-        clean_lines
-            .iter()
-            .take(3)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    let card_clipped: String = if card_summary.chars().count() > 360 {
-        let mut s: String = card_summary.chars().take(357).collect();
-        s.push_str("...");
-        s
-    } else if card_summary.is_empty() {
-        "Missão concluída com sucesso.".to_string()
-    } else {
-        card_summary
-    };
+    let sentences = split_sentences(&joined);
 
-    // Extract 1-2 short sentences (~175 chars max) for natural TTS speech
+    // Spoken: 1-2 COMPLETE sentences, never cut mid-sentence.
     let mut spoken_body = String::new();
-    for ch in joined.chars() {
-        spoken_body.push(ch);
-        let len = spoken_body.chars().count();
-        if len >= 65 && matches!(ch, '.' | '!' | '?') {
+    for sent in &sentences {
+        let sent = shorten_sentence(sent, 190);
+        if spoken_body.is_empty() {
+            spoken_body = sent;
+        } else if spoken_body.chars().count() + sent.chars().count() < 230 {
+            spoken_body.push(' ');
+            spoken_body.push_str(&sent);
+        } else {
             break;
         }
-        if len >= 175 {
-            if let Some(pos) = spoken_body.rfind(' ') {
-                spoken_body.truncate(pos);
-            }
-            spoken_body.push('.');
+        if spoken_body.chars().count() >= 110 {
             break;
         }
     }
-    let spoken_body = spoken_body.trim();
     let spoken_summary = if spoken_body.is_empty() {
         format!("Senhor, o agente {agent_name} concluiu a tarefa.")
     } else {
-        format!("Senhor, o agente {agent_name} concluiu: {spoken_body}")
+        format!("Senhor, o agente {agent_name} terminou. {spoken_body}")
     };
 
-    (spoken_summary, card_clipped)
+    // Card: up to ~4 complete sentences (~520 chars), no trailing ellipsis.
+    let mut card = String::new();
+    for sent in sentences.iter().take(6) {
+        if !card.is_empty() && card.chars().count() + sent.chars().count() > 520 {
+            break;
+        }
+        if !card.is_empty() {
+            card.push(' ');
+        }
+        card.push_str(sent);
+        if card.chars().count() >= 380 {
+            break;
+        }
+    }
+    let card_summary = if card.trim().is_empty() {
+        "Missão concluída com sucesso.".to_string()
+    } else {
+        card
+    };
+
+    (spoken_summary, card_summary)
 }
 
+fn split_sentences(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for (i, &c) in chars.iter().enumerate() {
+        cur.push(c);
+        let next_is_break = chars.get(i + 1).map(|n| n.is_whitespace()).unwrap_or(true);
+        if matches!(c, '.' | '!' | '?') && next_is_break {
+            let t = cur.trim().to_string();
+            // avoid splitting on short abbreviations like "Dr." / "n."
+            if t.chars().count() >= 25 {
+                out.push(t);
+                cur.clear();
+            }
+        }
+    }
+    let rest = cur.trim();
+    if !rest.is_empty() {
+        out.push(if rest.ends_with(|c| matches!(c, '.' | '!' | '?' | ':')) {
+            rest.to_string()
+        } else {
+            format!("{rest}.")
+        });
+    }
+    out
+}
+
+fn shorten_sentence(sent: &str, max: usize) -> String {
+    if sent.chars().count() <= max {
+        return sent.trim_end_matches(':').trim().to_string();
+    }
+    let head: String = sent.chars().take(max).collect();
+    let cut = head
+        .rfind(|c| matches!(c, ',' | ';' | '—' | '–'))
+        .filter(|&p| p > max / 2)
+        .unwrap_or_else(|| head.rfind(' ').unwrap_or(head.len()));
+    let mut s = head[..cut].trim_end_matches(|c: char| !c.is_alphanumeric()).to_string();
+    s.push('.');
+    s
+}
 pub fn spawn_background_agent(
     app: &AppHandle,
     state: &Arc<AppState>,
