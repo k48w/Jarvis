@@ -277,7 +277,7 @@ pub fn delete_routine(data_dir: &Path, id: &str) -> Result<bool, String> {
 }
 
 pub fn start_routines_scheduler(app: AppHandle, data_dir: PathBuf) {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
         // Skip first immediate tick so startup stays clean
         interval.tick().await;
