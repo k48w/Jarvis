@@ -2,15 +2,20 @@ import { useEffect, useState } from "react";
 import {
   Bot,
   Check,
+  CheckCircle2,
+  Clock3,
   Code2,
   Compass,
   Copy,
   Globe,
+  Loader2,
   Play,
   Send,
+  Sparkles,
   Square,
   Terminal,
   Trash2,
+  XCircle,
 } from "lucide-react";
 import type { AgentRole, ToolTrace } from "./bridge";
 import { MarkdownBlocks } from "./ResponseCard";
@@ -31,45 +36,79 @@ export interface AgentRun {
 export const AGENT_PRESETS: {
   role: AgentRole;
   name: string;
+  short: string;
   subtitle: string;
   sample: string;
 }[] = [
   {
     role: "research",
     name: "Pesquisador Web",
-    subtitle: "Pesquisa fontes atuais e entrega relatório estruturado",
-    sample: "Pesquise as novidades mais importantes de IA desta semana e resuma em tópicos.",
+    short: "Pesquisa",
+    subtitle: "Cruza fontes atuais e entrega relatório limpo",
+    sample:
+      "Pesquise as novidades mais importantes de IA desta semana e resuma em tópicos objetivos.",
   },
   {
     role: "coder",
     name: "Engenheiro de Código",
+    short: "Código",
     subtitle: "Escreve, revisa e depura scripts e arquiteturas",
-    sample: "Crie um script PowerShell para organizar minha pasta Downloads por tipo de arquivo.",
+    sample:
+      "Crie um script PowerShell seguro para organizar minha pasta Downloads por tipo de arquivo.",
   },
   {
     role: "operator",
     name: "Operador Windows",
-    subtitle: "Executa ações locais e automações no seu computador",
-    sample: "Liste os arquivos recentes da área de trabalho e sugira como organizá-los.",
+    short: "Windows",
+    subtitle: "Executa ações locais e automações no sistema",
+    sample:
+      "Liste os arquivos recentes da área de trabalho e sugira como organizá-los.",
   },
   {
     role: "planner",
     name: "Estrategista",
-    subtitle: "Transforma metas complexas em planos passo a passo",
-    sample: "Monte um plano de estudos enxuto de 7 dias para dominar TypeScript + Rust.",
+    short: "Plano",
+    subtitle: "Quebra objetivos complexos em etapas claras",
+    sample:
+      "Monte um plano prático de 7 dias para dominar TypeScript + Rust do zero.",
   },
 ];
 
-function RoleIcon({ role }: { role: AgentRole }) {
+function RoleIcon({ role, size = 15 }: { role: AgentRole; size?: number }) {
   switch (role) {
     case "research":
-      return <Globe />;
+      return <Globe size={size} />;
     case "coder":
-      return <Code2 />;
+      return <Code2 size={size} />;
     case "operator":
-      return <Terminal />;
+      return <Terminal size={size} />;
     case "planner":
-      return <Compass />;
+      return <Compass size={size} />;
+  }
+}
+
+function StatusIcon({ status }: { status: AgentRun["status"] }) {
+  switch (status) {
+    case "running":
+      return <Loader2 size={13} className="spin" />;
+    case "done":
+      return <CheckCircle2 size={13} />;
+    case "error":
+    case "cancelled":
+      return <XCircle size={13} />;
+  }
+}
+
+function statusLabel(status: AgentRun["status"]) {
+  switch (status) {
+    case "running":
+      return "Executando";
+    case "done":
+      return "Concluído";
+    case "cancelled":
+      return "Cancelado";
+    case "error":
+      return "Erro";
   }
 }
 
@@ -96,6 +135,7 @@ export function AgentsView({
   const [selectedRole, setSelectedRole] = useState<AgentRole>("research");
   const [taskInput, setTaskInput] = useState("");
   const [launching, setLaunching] = useState(false);
+  const [selectedId, setSelectedId] = useState<string>(agents[0]?.id ?? "");
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
@@ -107,8 +147,17 @@ export function AgentsView({
     return () => clearInterval(id);
   }, [hasRunning]);
 
+  // Auto-select newest agent when a new one appears
+  useEffect(() => {
+    if (agents.length > 0 && !agents.some((a) => a.id === selectedId)) {
+      setSelectedId(agents[0].id);
+    }
+  }, [agents, selectedId]);
+
   const activePreset =
     AGENT_PRESETS.find((p) => p.role === selectedRole) ?? AGENT_PRESETS[0];
+  const activeAgent =
+    agents.find((a) => a.id === selectedId) ?? agents[0] ?? null;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -127,38 +176,53 @@ export function AgentsView({
     try {
       await navigator.clipboard.writeText(agent.output);
       setCopiedId(agent.id);
-      window.setTimeout(() => setCopiedId((cur) => (cur === agent.id ? null : cur)), 1600);
+      window.setTimeout(
+        () => setCopiedId((cur) => (cur === agent.id ? null : cur)),
+        1600,
+      );
     } catch {
       /* ignore */
     }
   }
 
   const runningCount = agents.filter((a) => a.status === "running").length;
+  const doneCount = agents.filter((a) => a.status === "done").length;
 
   return (
-    <section className="module-shell agents-shell" aria-label="Central de Agentes">
-      <div className="module-header">
-        <div className="module-title-group">
-          <Bot className="module-icon" />
+    <section
+      className="ag-shell"
+      aria-label="Central de Agentes"
+    >
+      {/* Top Mission Control Bar */}
+      <header className="ag-topbar">
+        <div className="ag-brand">
+          <span className="ag-brand-icon">
+            <Bot size={16} />
+          </span>
           <div>
-            <h2>Central de Agentes</h2>
-            <p>
-              Execute vários subagentes em paralelo com busca na web e ferramentas do Windows.
-            </p>
+            <h2>Agentes Autônomos</h2>
+            <p>Até 3 missões paralelas em segundo plano com resumo falado</p>
           </div>
         </div>
-        <div className="module-stats">
-          <span className={runningCount > 0 ? "hud-badge live" : "hud-badge"}>
-            <i />
-            {runningCount > 0
-              ? `${runningCount} em execução`
-              : `${agents.length} ${agents.length === 1 ? "missão" : "missões"}`}
-          </span>
-        </div>
-      </div>
 
-      <div className="agent-launcher-card">
-        <div className="agent-preset-grid" role="radiogroup" aria-label="Especialidade do agente">
+        <div className="ag-metrics">
+          <span className={runningCount > 0 ? "ag-pill live" : "ag-pill"}>
+            <i />
+            {runningCount > 0 ? `${runningCount} rodando` : "Em espera"}
+          </span>
+          {doneCount > 0 && (
+            <span className="ag-pill done">{doneCount} concluído(s)</span>
+          )}
+        </div>
+      </header>
+
+      {/* Sleek Compact Command Launcher */}
+      <div className="ag-composer">
+        <div
+          className="ag-role-pills"
+          role="radiogroup"
+          aria-label="Especialidade do agente"
+        >
           {AGENT_PRESETS.map((preset) => (
             <button
               key={preset.role}
@@ -167,158 +231,210 @@ export function AgentsView({
               aria-checked={selectedRole === preset.role}
               className={
                 selectedRole === preset.role
-                  ? "agent-preset active"
-                  : "agent-preset"
+                  ? `ag-role-pill role-${preset.role} active`
+                  : `ag-role-pill role-${preset.role}`
               }
               onClick={() => setSelectedRole(preset.role)}
+              title={preset.subtitle}
             >
-              <span className="agent-preset-icon">
-                <RoleIcon role={preset.role} />
-              </span>
-              <span className="agent-preset-meta">
-                <strong>{preset.name}</strong>
-                <small>{preset.subtitle}</small>
-              </span>
+              <RoleIcon role={preset.role} size={13} />
+              <span>{preset.short}</span>
             </button>
           ))}
         </div>
 
-        <form className="agent-launch-form" onSubmit={(e) => void handleSubmit(e)}>
+        <form className="ag-form" onSubmit={(e) => void handleSubmit(e)}>
           <input
             type="text"
             value={taskInput}
-            placeholder={`Missão para ${activePreset.name}...`}
+            placeholder={`Delegar missão para ${activePreset.name}...`}
             aria-label="Missão do agente"
             onChange={(e) => setTaskInput(e.target.value)}
           />
           <button
             type="button"
-            className="mini-btn"
+            className="ag-btn ghost"
             onClick={() => setTaskInput(activePreset.sample)}
             title="Preencher exemplo"
           >
+            <Sparkles size={13} />
             Exemplo
           </button>
           <button
             type="submit"
-            className="mini-btn accent"
+            className="ag-btn primary"
             disabled={!taskInput.trim() || launching}
           >
-            <Play />
-            Lançar Agente
+            <Play size={13} />
+            Lançar
           </button>
         </form>
       </div>
 
+      {/* Main Content: Empty State or Master-Detail Split */}
       {agents.length === 0 ? (
-        <div className="module-empty">
-          <Bot />
-          <strong>Nenhum agente ativo no momento</strong>
+        <div className="ag-empty">
+          <div className="ag-empty-orb">
+            <Bot size={26} />
+          </div>
+          <h3>Nenhuma missão ativa</h3>
           <p>
-            Escolha uma especialidade acima e descreva uma missão — você pode rodar múltiplos
-            agentes ao mesmo tempo enquanto continua usando o J.A.R.V.I.S.
+            Escolha uma especialidade acima ou peça por voz ao J.A.R.V.I.S. — quando
+            concluir, ele fala o resumo automaticamente.
           </p>
         </div>
       ) : (
-        <div className="agent-cards-grid">
-          {agents.map((agent) => (
-            <article key={agent.id} className={`agent-card status-${agent.status}`}>
-              <div className="agent-card-head">
-                <div className="agent-card-title">
-                  <span className="agent-preset-icon small">
-                    <RoleIcon role={agent.role} />
+        <div className="ag-workspace">
+          {/* Left Rail: Mission List */}
+          <aside className="ag-rail" aria-label="Lista de agentes">
+            {agents.map((agent) => {
+              const isSelected = agent.id === activeAgent?.id;
+              return (
+                <button
+                  key={agent.id}
+                  type="button"
+                  className={`ag-rail-item status-${agent.status} ${isSelected ? "selected" : ""}`}
+                  onClick={() => setSelectedId(agent.id)}
+                >
+                  <div className="ag-rail-top">
+                    <span className={`ag-role-dot role-${agent.role}`}>
+                      <RoleIcon role={agent.role} size={13} />
+                    </span>
+                    <strong className="ag-rail-name">{agent.name}</strong>
+                    <span className={`ag-status-badge status-${agent.status}`}>
+                      <StatusIcon status={agent.status} />
+                    </span>
+                  </div>
+                  <p className="ag-rail-task">{agent.task}</p>
+                  <div className="ag-rail-foot">
+                    <span>
+                      <Clock3 size={11} />{" "}
+                      {formatElapsed(agent.startedAt, agent.finishedAt, now)}
+                    </span>
+                    <span>
+                      {agent.traces.length > 0
+                        ? `${agent.traces.length} ação(ões)`
+                        : statusLabel(agent.status)}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </aside>
+
+          {/* Right Stage: Selected Agent Detail */}
+          {activeAgent && (
+            <article
+              className={`ag-detail status-${activeAgent.status}`}
+              aria-label={`Detalhes de ${activeAgent.name}`}
+            >
+              <div className="ag-detail-head">
+                <div className="ag-detail-title">
+                  <span className={`ag-role-dot lg role-${activeAgent.role}`}>
+                    <RoleIcon role={activeAgent.role} size={16} />
                   </span>
                   <div>
-                    <strong>{agent.name}</strong>
-                    <span className="agent-status-line">
-                      <i className={agent.status === "running" ? "live" : ""} />
-                      {agent.status === "running"
-                        ? "Executando"
-                        : agent.status === "done"
-                          ? "Concluído"
-                          : agent.status === "cancelled"
-                            ? "Cancelado"
-                            : "Erro"}
-                      {" · "}
-                      {formatElapsed(agent.startedAt, agent.finishedAt, now)}
+                    <div className="ag-detail-name-row">
+                      <h3>{activeAgent.name}</h3>
+                      <span
+                        className={`ag-status-pill status-${activeAgent.status}`}
+                      >
+                        <StatusIcon status={activeAgent.status} />
+                        {statusLabel(activeAgent.status)}
+                      </span>
+                    </div>
+                    <span className="ag-detail-time">
+                      Tempo decorrido:{" "}
+                      <code>
+                        {formatElapsed(
+                          activeAgent.startedAt,
+                          activeAgent.finishedAt,
+                          now,
+                        )}
+                      </code>
                     </span>
                   </div>
                 </div>
 
-                <div className="agent-card-actions">
-                  {agent.status === "running" ? (
+                <div className="ag-detail-actions">
+                  {activeAgent.status === "running" ? (
                     <button
                       type="button"
-                      className="icon-tiny danger"
-                      title="Parar agente"
-                      aria-label="Parar agente"
-                      onClick={() => void onCancel(agent.id)}
+                      className="ag-btn danger"
+                      onClick={() => void onCancel(activeAgent.id)}
                     >
-                      <Square />
+                      <Square size={12} /> Parar
                     </button>
                   ) : (
                     <>
-                      {agent.output && (
+                      {activeAgent.output && (
                         <>
                           <button
                             type="button"
-                            className="icon-tiny"
-                            title="Enviar resultado para o Núcleo"
-                            aria-label="Enviar resultado para o Núcleo"
-                            onClick={() => onSendToCore(agent)}
+                            className="ag-btn ghost"
+                            onClick={() => onSendToCore(activeAgent)}
+                            title="Enviar relatório para a conversa principal"
                           >
-                            <Send />
+                            <Send size={12} /> Enviar ao Núcleo
                           </button>
                           <button
                             type="button"
-                            className="icon-tiny"
-                            title="Copiar resultado"
-                            aria-label="Copiar resultado"
-                            onClick={() => void handleCopy(agent)}
+                            className="ag-btn ghost"
+                            onClick={() => void handleCopy(activeAgent)}
                           >
-                            {copiedId === agent.id ? <Check /> : <Copy />}
+                            {copiedId === activeAgent.id ? (
+                              <Check size={12} />
+                            ) : (
+                              <Copy size={12} />
+                            )}
+                            {copiedId === activeAgent.id ? "Copiado" : "Copiar"}
                           </button>
                         </>
                       )}
                       <button
                         type="button"
-                        className="icon-tiny"
-                        title="Remover card"
-                        aria-label="Remover agente"
-                        onClick={() => onRemove(agent.id)}
+                        className="ag-btn icon-only"
+                        title="Remover missão"
+                        aria-label="Remover missão"
+                        onClick={() => onRemove(activeAgent.id)}
                       >
-                        <Trash2 />
+                        <Trash2 size={13} />
                       </button>
                     </>
                   )}
                 </div>
               </div>
 
-              <div className="agent-card-task">{agent.task}</div>
+              <div className="ag-mission-box">
+                <span className="ag-mission-label">MISSÃO</span>
+                <p>{activeAgent.task}</p>
+              </div>
 
-              {agent.traces.length > 0 && (
-                <div className="tool-chips">
-                  {agent.traces.map((t) => (
-                    <span key={t.id} className={`tool-chip ${t.status}`}>
+              {activeAgent.traces.length > 0 && (
+                <div className="ag-traces" aria-label="Etapas executadas">
+                  {activeAgent.traces.map((t) => (
+                    <span key={t.id} className={`ag-trace-chip ${t.status}`}>
+                      <i />
                       {t.title}
                     </span>
                   ))}
                 </div>
               )}
 
-              <div className="agent-card-body">
-                {agent.error ? (
-                  <p className="agent-error-text">{agent.error}</p>
-                ) : agent.output ? (
-                  <MarkdownBlocks text={agent.output} />
+              <div className="ag-output-scroll">
+                {activeAgent.error ? (
+                  <div className="ag-error-box">{activeAgent.error}</div>
+                ) : activeAgent.output ? (
+                  <MarkdownBlocks text={activeAgent.output} />
                 ) : (
-                  <p className="agent-thinking-text">
-                    Inicializando contexto e analisando missão...
-                  </p>
+                  <div className="ag-loading-state">
+                    <Loader2 size={18} className="spin" />
+                    <span>Pesquisando e estruturando resposta...</span>
+                  </div>
                 )}
               </div>
             </article>
-          ))}
+          )}
         </div>
       )}
     </section>

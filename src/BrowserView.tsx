@@ -5,6 +5,7 @@ import {
   ArrowUp,
   ExternalLink,
   Globe,
+  Lock,
   Maximize2,
   Mic,
   RotateCw,
@@ -467,38 +468,36 @@ export function BrowserView({
       {/* Right column: Full 60fps Embedded Chromium WebView2 Browser */}
       <div className="split-browser-col">
         <div className="split-browser-topbar">
-          <div className="split-browser-tab-pill">
-            <Globe />
-            <span>{pageTitle}</span>
-          </div>
-
           <div className="browser-nav-btns">
             <button
               type="button"
-              className="icon-tiny"
+              className="br-icon-btn"
               aria-label="Voltar"
+              title="Voltar"
               disabled={!isTauri || loading}
               onClick={() => void handleBack()}
             >
-              <ArrowLeft />
+              <ArrowLeft size={14} />
             </button>
             <button
               type="button"
-              className="icon-tiny"
+              className="br-icon-btn"
               aria-label="Avançar"
+              title="Avançar"
               disabled={!isTauri || loading}
               onClick={() => void handleForward()}
             >
-              <ArrowRight />
+              <ArrowRight size={14} />
             </button>
             <button
               type="button"
-              className="icon-tiny"
+              className="br-icon-btn"
               aria-label="Recarregar"
+              title="Recarregar"
               disabled={loading}
               onClick={() => void handleReload()}
             >
-              <RotateCw className={loading ? "spin" : ""} />
+              <RotateCw size={13} className={loading ? "spin" : ""} />
             </button>
           </div>
 
@@ -510,10 +509,17 @@ export function BrowserView({
               void handleNavigate(addressInput);
             }}
           >
+            <span className="br-omni-icon" aria-hidden="true">
+              {addressInput.startsWith("https://") ? (
+                <Lock size={12} />
+              ) : (
+                <Globe size={12} />
+              )}
+            </span>
             <input
               type="text"
               value={addressInput}
-              placeholder="Digite qualquer URL ou pesquise..."
+              placeholder="Pesquise ou digite um endereço..."
               aria-label="Barra de endereço"
               onFocus={() => {
                 addressFocusedRef.current = true;
@@ -529,47 +535,55 @@ export function BrowserView({
             {isTauri && (
               <button
                 type="button"
-                className={showOverlay ? "mini-btn accent" : "mini-btn"}
+                className={showOverlay ? "br-pill-btn active" : "br-pill-btn"}
                 title="Mostrar números [1..N] sobre os elementos que a IA enxerga"
                 onClick={() => void handleToggleOverlay()}
               >
-                <ScanEye />
-                Raio-X IA
+                <ScanEye size={13} />
+                <span>Raio-X</span>
               </button>
             )}
             <button
               type="button"
-              className="icon-tiny"
+              className="br-icon-btn"
               title="Abrir no navegador externo"
               aria-label="Abrir no navegador externo"
               onClick={() => void openNativeBrowserWindow(addressInput, pageTitle)}
             >
-              <ExternalLink />
+              <ExternalLink size={14} />
             </button>
             <button
               type="button"
-              className="icon-tiny"
+              className="br-icon-btn danger"
               title="Fechar navegador embutido"
               aria-label="Fechar navegador"
               onClick={onCloseBrowser}
             >
-              <X />
+              <X size={14} />
             </button>
           </div>
         </div>
 
-        <div className="browser-bookmarks">
-          {BOOKMARKS.map((bm) => (
-            <button
-              key={bm.label}
-              type="button"
-              className="quick-chip bookmark-chip"
-              onClick={() => void handleNavigate(bm.url)}
-            >
-              {bm.label}
-            </button>
-          ))}
+        <div className="browser-subbar">
+          <div className="browser-bookmarks">
+            {BOOKMARKS.map((bm) => (
+              <button
+                key={bm.label}
+                type="button"
+                className="br-bm-chip"
+                onClick={() => void handleNavigate(bm.url)}
+              >
+                {bm.label}
+              </button>
+            ))}
+          </div>
+          <div className="br-page-title" title={pageTitle}>
+            <Globe size={11} />
+            <span>{pageTitle}</span>
+          </div>
         </div>
+
+        {loading && <div className="br-loading-bar" aria-hidden="true" />}
 
         {statusError && (
           <div className="module-error-banner" role="alert">
