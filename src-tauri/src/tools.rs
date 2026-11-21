@@ -580,6 +580,66 @@ pub fn tool_catalog() -> Vec<ToolSpec> {
                 "required": ["command"]
             }),
         },
+        ToolSpec {
+            name: "create_skill",
+            title: "Criar ou atualizar Skill (/comando)",
+            description: "Salva uma macro/skill reutilizável acionável por /comando no chat (ex: /modo-jogo, /deploy, /bomdia).",
+            risk: ToolRisk::Read,
+            parameters: || json!({
+                "type": "object",
+                "properties": {
+                    "slug": { "type": "string", "description": "Comando sem espaços (ex: modo-jogo)." },
+                    "name": { "type": "string", "description": "Nome amigável da skill." },
+                    "description": { "type": "string", "description": "Descrição curta." },
+                    "prompt": { "type": "string", "description": "Instrução completa que o J.A.R.V.I.S. executará." }
+                },
+                "required": ["slug", "prompt"]
+            }),
+        },
+        ToolSpec {
+            name: "list_skills",
+            title: "Listar Skills (/comandos)",
+            description: "Lista todas as skills/macros (/comando) disponíveis.",
+            risk: ToolRisk::Read,
+            parameters: || json!({ "type": "object", "properties": {} }),
+        },
+        ToolSpec {
+            name: "create_routine",
+            title: "Criar Rotina Proativa Agendada",
+            description: "Agenda uma rotina recorrente (diária em HH:MM ou a cada X minutos) para o J.A.R.V.I.S. executar automaticamente.",
+            risk: ToolRisk::Read,
+            parameters: || json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Nome curto da rotina (ex: Briefing Matinal)." },
+                    "schedule_kind": { "type": "string", "enum": ["daily", "interval"], "description": "Tipo: daily (horário fixo HH:MM) ou interval (a cada X minutos)." },
+                    "daily_hhmm": { "type": "string", "description": "Horário diário HH:MM (ex: 09:00) quando schedule_kind='daily'." },
+                    "interval_minutes": { "type": "integer", "description": "Intervalo em minutos (1..1440) quando schedule_kind='interval'." },
+                    "prompt": { "type": "string", "description": "Instrução que o J.A.R.V.I.S. executará automaticamente." }
+                },
+                "required": ["name", "schedule_kind", "prompt"]
+            }),
+        },
+        ToolSpec {
+            name: "list_routines",
+            title: "Listar Rotinas Agendadas",
+            description: "Lista todas as rotinas proativas agendadas (ativas e pausadas).",
+            risk: ToolRisk::Read,
+            parameters: || json!({ "type": "object", "properties": {} }),
+        },
+        ToolSpec {
+            name: "delete_routine",
+            title: "Remover Rotina Agendada",
+            description: "Remove uma rotina agendada pelo ID.",
+            risk: ToolRisk::Read,
+            parameters: || json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "ID da rotina." }
+                },
+                "required": ["id"]
+            }),
+        },
     ]
 }
 
@@ -1925,6 +1985,71 @@ pub async fn execute_tool_with_policy(
             let timeout = args["timeout_secs"].as_u64().unwrap_or(60);
             let ctrl = app.state::<Arc<crate::terminal::TerminalController>>();
             crate::terminal::run_and_collect_streaming(app, &ctrl, cmd, cwd, timeout).await
+        }
+        "create_skill" => {
+            let slug = args["slug"].as_str().unwrap_or("");
+            let sname = args["name"].as_str().unwrap_or(slug);
+            let desc = args["description"].as_str().unwrap_or("");
+            let prompt = args["prompt"].as_str().unwrap_or("");
+            crate::routines::save_skill(&state.data_dir, slug, sname, desc, prompt)
+                .map(|s| format!("Skill '/{}' ({}) salva com sucesso.", s.slug, s.name))
+        }
+        "list_skills" => crate::routines::list_skills(&state.data_dir).map(|list| {
+            list.into_iter()
+                .map(|s| format!("- /{} ({}): {}", s.slug, s.name, s.description))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }),
+        "create_routine" => {
+            let rname = args["name"].as_str().unwrap_or("");
+            let kind = args["schedule_kind"].as_str().unwrap_or("interval");
+            let interval_min = args["interval_minutes"].as_u64().map(|v| v as u32);
+            let hhmm = args["daily_hhmm"].as_str();
+            let prompt = args["prompt"].as_str().unwrap_or("");
+            crate::routines::create_routine(
+                &state.data_dir,
+                rname,
+                kind,
+                interval_min,
+                hhmm,
+                prompt,
+            )
+            .map(|r| {
+                let sched = if r.schedule_kind == "daily" {
+                    format!("todo dia às {}", r.daily_hhmm.unwrap_or_default())
+                } else {
+                    format!("a cada {} min", r.interval_minutes.unwrap_or(60))
+                };
+                format!("Rotina '{}' agendada ({sched}, id: {}).", r.name, r.id)
+            })
+        }
+        "list_routines" => crate::routines::list_routines(&state.data_dir).map(|list| {
+            if list.is_empty() {
+                "Nenhuma rotina agendada.".to_string()
+            } else {
+                list.into_iter()
+                    .map(|r| {
+                        let sched = if r.schedule_kind == "daily" {
+                            format!("diária {}", r.daily_hhmm.unwrap_or_default())
+                        } else {
+                            format!("a cada {} min", r.interval_minutes.unwrap_or(60))
+                        };
+                        let st = if r.enabled { "ativa" } else { "pausada" };
+                        format!("- [{}] {} ({sched}, id: {}): {}", st, r.name, r.id, r.prompt)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+        }),
+        "delete_routine" => {
+            let id = args["id"].as_str().unwrap_or("");
+            crate::routines::delete_routine(&state.data_dir, id).map(|ok| {
+                if ok {
+                    "Rotina removida.".to_string()
+                } else {
+                    "Rotina não encontrada.".to_string()
+                }
+            })
         }
         _ => Err(format!("Ferramenta não implementada: {name}")),
     };

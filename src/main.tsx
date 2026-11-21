@@ -28,6 +28,7 @@ import {
   Volume2,
   VolumeX,
   X,
+  Zap,
 } from "lucide-react";
 import "@fontsource-variable/space-grotesk";
 import Stage, { type VisualTheme } from "./Stage";
@@ -38,6 +39,7 @@ import { BrowserView } from "./BrowserView";
 import { CommandPalette } from "./CommandPalette";
 import { DiffView, type FileDiffRecord } from "./DiffView";
 import { TerminalView, type TerminalSession } from "./TerminalView";
+import { RoutinesView } from "./RoutinesView";
 import { LandingShowcase } from "./LandingShowcase";
 import { MascotBuddy, MascotWindow } from "./MascotBuddy";
 import { AudioEngine } from "./audio";
@@ -78,6 +80,16 @@ import {
   runTerminalCommand,
   cancelTerminalCommand,
   onTerminalEvent,
+  listSkills,
+  saveSkill,
+  deleteSkill,
+  listRoutines,
+  createRoutine,
+  toggleRoutine,
+  deleteRoutine,
+  onRoutineTrigger,
+  type SkillItem,
+  type RoutineItem,
   onBrowserPanel,
   onChatEvent,
   onFileDiff,
@@ -331,13 +343,17 @@ function App() {
   const [audioError, setAudioError] = useState(false);
 
   const [workspaceView, setWorkspaceView] = useState<
-    "core" | "agents" | "browser" | "diff" | "terminal"
+    "core" | "agents" | "browser" | "diff" | "terminal" | "routines"
   >("core");
   const [agents, setAgents] = useState<AgentRun[]>([]);
   const [fileDiffs, setFileDiffs] = useState<FileDiffRecord[]>([]);
   const [terminalSessions, setTerminalSessions] = useState<TerminalSession[]>(
     [],
   );
+  const [skills, setSkills] = useState<SkillItem[]>([]);
+  const [routines, setRoutines] = useState<RoutineItem[]>([]);
+  const skillsRef = useRef<SkillItem[]>([]);
+  skillsRef.current = skills;
   const [browserSessionOpen, setBrowserSessionOpen] = useState(false);
   const [browserUrl, setBrowserUrl] = useState("");
   const [browserTitle, setBrowserTitle] = useState("");
@@ -704,6 +720,18 @@ function App() {
     }
 
     let finalText = baseText || "Analise o anexo enviado.";
+    if (baseText.startsWith("/")) {
+      const [rawCmd, ...rest] = baseText.slice(1).trim().split(/\s+/);
+      const slug = rawCmd?.toLowerCase();
+      const matched = skillsRef.current.find((s) => s.slug === slug);
+      if (matched) {
+        const extra = rest.join(" ").trim();
+        finalText = extra
+          ? `${matched.prompt}\n\nContexto adicional do usuário: ${extra}`
+          : matched.prompt;
+        notifyMascot(`Executando skill /${matched.slug}...`, "cheer");
+      }
+    }
     if (pendingFiles.length > 0) {
       const filesBlock = pendingFiles
         .map((f) => `\n\n--- Anexo: ${f.name} ---\n${f.content}`)
@@ -1365,7 +1393,11 @@ function App() {
     let unScreenPulse: (() => void) | undefined;
     let unFileDiff: (() => void) | undefined;
     let unTerminal: (() => void) | undefined;
+    let unRoutine: (() => void) | undefined;
     let pulseTimer = 0;
+
+    void listSkills().then(setSkills).catch(() => {});
+    void listRoutines().then(setRoutines).catch(() => {});
 
     void onChatEvent((ev) => {
       if (ev.conversationId.startsWith("agent:")) {
@@ -1683,6 +1715,16 @@ function App() {
       unTerminal = fn;
     });
 
+    void onRoutineTrigger((ev) => {
+      notifyMascot(`⏰ Rotina automática: ${ev.name}`, "cheer");
+      void listRoutines().then(setRoutines).catch(() => {});
+      if (!isStreamingRef.current) {
+        void submitText(ev.prompt, false);
+      }
+    }).then((fn) => {
+      unRoutine = fn;
+    });
+
     return () => {
       unChat?.();
       unApprove?.();
@@ -1694,6 +1736,7 @@ function App() {
       unScreenPulse?.();
       unFileDiff?.();
       unTerminal?.();
+      unRoutine?.();
       window.clearTimeout(pulseTimer);
     };
   }, []);
@@ -1906,7 +1949,7 @@ function App() {
           )}
         </div>
 
-        {!immersive && (agents.length > 0 || browserSessionOpen || fileDiffs.length > 0 || terminalSessions.length > 0 || workspaceView === "terminal") && (
+        {!immersive && (agents.length > 0 || browserSessionOpen || fileDiffs.length > 0 || terminalSessions.length > 0 || workspaceView === "terminal" || workspaceView === "routines") && (
           <div className="workspace-dock contextual-dock" role="tablist" aria-label="Áreas de trabalho">
             <button
               type="button"
@@ -1918,6 +1961,18 @@ function App() {
               <Sparkles />
               <span>Núcleo</span>
             </button>
+            {workspaceView === "routines" && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={workspaceView === "routines"}
+                className="dock-tab active"
+                onClick={() => setWorkspaceView("routines")}
+              >
+                <Zap />
+                <span>Skills &amp; Rotinas</span>
+              </button>
+            )}
             {(terminalSessions.length > 0 || workspaceView === "terminal") && (
               <button
                 type="button"
@@ -2001,6 +2056,20 @@ function App() {
               onClick={() => void startNewConversation()}
             >
               <Plus />
+            </button>
+          )}
+          {!immersive && (
+            <button
+              aria-label="Skills e Rotinas"
+              title="Skills (/comandos) e Rotinas Proativas"
+              className={workspaceView === "routines" ? "active" : undefined}
+              onClick={() => {
+                void listSkills().then(setSkills).catch(() => {});
+                void listRoutines().then(setRoutines).catch(() => {});
+                setWorkspaceView((v) => (v === "routines" ? "core" : "routines"));
+              }}
+            >
+              <Zap />
             </button>
           )}
           {!immersive && (
@@ -2164,6 +2233,49 @@ function App() {
               await cancelTerminalCommand(id);
             }}
             onClear={() => setTerminalSessions([])}
+          />
+        )}
+
+        {!immersive && workspaceView === "routines" && (
+          <RoutinesView
+            skills={skills}
+            routines={routines}
+            onRunPrompt={(prompt) => {
+              setWorkspaceView("core");
+              void submitText(prompt, false);
+            }}
+            onSaveSkill={async (slug, name, description, prompt) => {
+              await saveSkill(slug, name, description, prompt);
+              setSkills(await listSkills());
+            }}
+            onDeleteSkill={async (idOrSlug) => {
+              await deleteSkill(idOrSlug);
+              setSkills(await listSkills());
+            }}
+            onCreateRoutine={async (
+              name,
+              scheduleKind,
+              intervalMinutes,
+              dailyHhmm,
+              prompt,
+            ) => {
+              await createRoutine(
+                name,
+                scheduleKind,
+                intervalMinutes,
+                dailyHhmm,
+                prompt,
+              );
+              setRoutines(await listRoutines());
+            }}
+            onToggleRoutine={async (id, enabled) => {
+              await toggleRoutine(id, enabled);
+              setRoutines(await listRoutines());
+            }}
+            onDeleteRoutine={async (id) => {
+              await deleteRoutine(id);
+              setRoutines(await listRoutines());
+            }}
           />
         )}
 

@@ -6,6 +6,7 @@ mod google_oauth;
 mod llm;
 mod mic;
 mod oauth;
+mod routines;
 mod state;
 mod storage;
 mod terminal;
@@ -1233,6 +1234,73 @@ async fn cancel_terminal_command(
     Ok(ctrl.cancel(&id).await)
 }
 
+#[tauri::command]
+async fn list_skills(state: State<'_, Arc<AppState>>) -> Result<Vec<routines::SkillItem>, String> {
+    routines::list_skills(&state.data_dir)
+}
+
+#[tauri::command]
+async fn save_skill(
+    state: State<'_, Arc<AppState>>,
+    slug: String,
+    name: String,
+    description: String,
+    prompt: String,
+) -> Result<routines::SkillItem, String> {
+    routines::save_skill(&state.data_dir, &slug, &name, &description, &prompt)
+}
+
+#[tauri::command]
+async fn delete_skill(
+    state: State<'_, Arc<AppState>>,
+    id_or_slug: String,
+) -> Result<bool, String> {
+    routines::delete_skill(&state.data_dir, &id_or_slug)
+}
+
+#[tauri::command]
+async fn list_routines(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<routines::RoutineItem>, String> {
+    routines::list_routines(&state.data_dir)
+}
+
+#[tauri::command]
+async fn create_routine(
+    state: State<'_, Arc<AppState>>,
+    name: String,
+    schedule_kind: String,
+    interval_minutes: Option<u32>,
+    daily_hhmm: Option<String>,
+    prompt: String,
+) -> Result<routines::RoutineItem, String> {
+    routines::create_routine(
+        &state.data_dir,
+        &name,
+        &schedule_kind,
+        interval_minutes,
+        daily_hhmm.as_deref(),
+        &prompt,
+    )
+}
+
+#[tauri::command]
+async fn toggle_routine(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    enabled: bool,
+) -> Result<routines::RoutineItem, String> {
+    routines::toggle_routine(&state.data_dir, &id, enabled)
+}
+
+#[tauri::command]
+async fn delete_routine(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<bool, String> {
+    routines::delete_routine(&state.data_dir, &id)
+}
+
 fn setup_tray(app: &AppHandle, state: Arc<AppState>) -> tauri::Result<()> {
     let toggle_item =
         MenuItem::with_id(app, "toggle", "Mostrar / Ocultar J.A.R.V.I.S.", true, None::<&str>)?;
@@ -1319,6 +1387,7 @@ fn main() {
             app.manage(Arc::clone(&app_state));
             app.manage(Arc::new(mic::MicController::default()));
             app.manage(Arc::new(terminal::TerminalController::default()));
+            routines::start_routines_scheduler(app.handle().clone(), app_state.data_dir.clone());
 
             #[cfg(windows)]
             if let Some(main_win) = app.get_webview_window("main") {
@@ -1442,6 +1511,13 @@ fn main() {
             append_assistant_note,
             run_terminal_command,
             cancel_terminal_command,
+            list_skills,
+            save_skill,
+            delete_skill,
+            list_routines,
+            create_routine,
+            toggle_routine,
+            delete_routine,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run the JARVIS desktop application");

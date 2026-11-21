@@ -1436,3 +1436,173 @@ export function onTerminalEvent(
   }
   return subscribeBrowser("jarvis:terminal-event", handler);
 }
+
+export interface SkillItem {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  prompt: string;
+  builtin: boolean;
+  createdAt: string;
+}
+
+export interface RoutineItem {
+  id: string;
+  name: string;
+  scheduleKind: "interval" | "daily";
+  intervalMinutes?: number | null;
+  dailyHhmm?: string | null;
+  prompt: string;
+  enabled: boolean;
+  lastRunAt?: string | null;
+  createdAt: string;
+}
+
+export interface RoutineTriggerEvent {
+  id: string;
+  name: string;
+  prompt: string;
+}
+
+const SIM_SKILLS: SkillItem[] = [
+  {
+    id: "builtin-briefing",
+    slug: "briefing",
+    name: "Briefing do Dia",
+    description: "Hora local, saúde do PC e 3 principais notícias do dia.",
+    prompt: "Faça um briefing rápido com hora, status do sistema e principais notícias de hoje.",
+    builtin: true,
+    createdAt: new Date().toISOString(),
+  },
+  {
+    id: "builtin-saude-pc",
+    slug: "saude-pc",
+    name: "Diagnóstico do PC",
+    description: "Inspeciona CPU, RAM, discos e processos pesados.",
+    prompt: "Verifique o status do sistema e entregue um diagnóstico rápido.",
+    builtin: true,
+    createdAt: new Date().toISOString(),
+  },
+  {
+    id: "builtin-foco",
+    slug: "foco",
+    name: "Modo Foco (Pomodoro)",
+    description: "Volume em 25% e timer de foco de 25 minutos.",
+    prompt: "Ajuste volume para 25% e crie um timer de 25 minutos para foco.",
+    builtin: true,
+    createdAt: new Date().toISOString(),
+  },
+  {
+    id: "builtin-git-review",
+    slug: "git-review",
+    name: "Revisão Git do Projeto",
+    description: "Lê git_status + git_diff e sugere mensagem de commit.",
+    prompt: "Revise git status e git diff e sugira uma mensagem de commit.",
+    builtin: true,
+    createdAt: new Date().toISOString(),
+  },
+];
+
+let simSkillsState = [...SIM_SKILLS];
+let simRoutinesState: RoutineItem[] = [];
+
+export async function listSkills(): Promise<SkillItem[]> {
+  if (isTauri) return invoke<SkillItem[]>("list_skills");
+  return [...simSkillsState];
+}
+
+export async function saveSkill(
+  slug: string,
+  name: string,
+  description: string,
+  prompt: string,
+): Promise<SkillItem> {
+  if (isTauri) {
+    return invoke<SkillItem>("save_skill", { slug, name, description, prompt });
+  }
+  const clean = slug.trim().replace(/^\/+/, "").toLowerCase();
+  const item: SkillItem = {
+    id: `sim-skill-${Date.now()}`,
+    slug: clean,
+    name: name.trim() || clean,
+    description: description.trim(),
+    prompt: prompt.trim(),
+    builtin: false,
+    createdAt: new Date().toISOString(),
+  };
+  simSkillsState = [...simSkillsState.filter((s) => s.slug !== clean), item];
+  return item;
+}
+
+export async function deleteSkill(idOrSlug: string): Promise<boolean> {
+  if (isTauri) return invoke<boolean>("delete_skill", { idOrSlug });
+  simSkillsState = simSkillsState.filter(
+    (s) => s.id !== idOrSlug && s.slug !== idOrSlug,
+  );
+  return true;
+}
+
+export async function listRoutines(): Promise<RoutineItem[]> {
+  if (isTauri) return invoke<RoutineItem[]>("list_routines");
+  return [...simRoutinesState];
+}
+
+export async function createRoutine(
+  name: string,
+  scheduleKind: "interval" | "daily",
+  intervalMinutes: number | undefined,
+  dailyHhmm: string | undefined,
+  prompt: string,
+): Promise<RoutineItem> {
+  if (isTauri) {
+    return invoke<RoutineItem>("create_routine", {
+      name,
+      scheduleKind,
+      intervalMinutes,
+      dailyHhmm,
+      prompt,
+    });
+  }
+  const item: RoutineItem = {
+    id: `sim-routine-${Date.now()}`,
+    name: name.trim(),
+    scheduleKind,
+    intervalMinutes: scheduleKind === "interval" ? (intervalMinutes ?? 60) : null,
+    dailyHhmm: scheduleKind === "daily" ? (dailyHhmm ?? "09:00") : null,
+    prompt: prompt.trim(),
+    enabled: true,
+    lastRunAt: null,
+    createdAt: new Date().toISOString(),
+  };
+  simRoutinesState = [...simRoutinesState, item];
+  return item;
+}
+
+export async function toggleRoutine(
+  id: string,
+  enabled: boolean,
+): Promise<RoutineItem> {
+  if (isTauri) return invoke<RoutineItem>("toggle_routine", { id, enabled });
+  simRoutinesState = simRoutinesState.map((r) =>
+    r.id === id ? { ...r, enabled } : r,
+  );
+  return simRoutinesState.find((r) => r.id === id)!;
+}
+
+export async function deleteRoutine(id: string): Promise<boolean> {
+  if (isTauri) return invoke<boolean>("delete_routine", { id });
+  simRoutinesState = simRoutinesState.filter((r) => r.id !== id);
+  return true;
+}
+
+export function onRoutineTrigger(
+  handler: (ev: RoutineTriggerEvent) => void,
+): Promise<UnlistenFn> {
+  if (isTauri) {
+    return listen<RoutineTriggerEvent>("jarvis:routine-trigger", (e) =>
+      handler(e.payload),
+    );
+  }
+  return subscribeBrowser("jarvis:routine-trigger", handler);
+}
