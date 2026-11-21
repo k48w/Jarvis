@@ -28,8 +28,36 @@ import {
 } from "lucide-react";
 import Stage, { type VisualTheme } from "./Stage";
 import { HudOverlay, VoiceSpectrum } from "./HudOverlay";
+import { AudioEngine } from "./audio";
 import mascotSheetUrl from "./assets/mascot-sheet.png";
 import type { CoreState } from "./rhythm";
+
+const GALLERY_SLIDES = [
+  {
+    id: "cockpit",
+    title: "Cockpit Principal 3D & HUD Orbital",
+    subtitle: "Esfera de plasma GLSL reativa à voz, retícula giroscópica e resposta Markdown ao vivo.",
+    img: "/og-cover.png",
+  },
+  {
+    id: "browser",
+    title: "Navegador Chromium 60fps Dividido (Estilo Codex)",
+    subtitle: "O próprio J.A.R.V.I.S. abre sites ao lado da conversa, inspeciona elementos e clica/digita via CDP.",
+    img: "/gallery-browser.png",
+  },
+  {
+    id: "agents",
+    title: "Central de Subagentes Paralelos",
+    subtitle: "Aba contextual dinâmica que surge quando o J.A.R.V.I.S. delega pesquisas em segundo plano.",
+    img: "/gallery-agents.png",
+  },
+  {
+    id: "awakening",
+    title: "Modo Imersivo & Despertar do Reator",
+    subtitle: "Visualização pura em tela cheia (F11) do núcleo de plasma em 60 quadros por segundo.",
+    img: "/gallery-awakening.png",
+  },
+];
 
 const GITHUB_REPO_URL = "https://github.com/k48w/Jarvis";
 const GITHUB_RELEASE_URL =
@@ -157,8 +185,27 @@ export function LandingShowcase({
 }) {
   const [demoState, setDemoState] = useState<CoreState>("responding");
   const [activePillar, setActivePillar] = useState<PillarId>("vision");
+  const [activeSlide, setActiveSlide] = useState<string>("cockpit");
   const [copiedCmd, setCopiedCmd] = useState(false);
   const demoAudioRef = useRef<number>(0.42);
+  const sfxRef = useRef<AudioEngine | null>(null);
+
+  useEffect(() => {
+    return () => {
+      sfxRef.current?.dispose();
+    };
+  }, []);
+
+  function selectDemoState(next: CoreState) {
+    setDemoState(next);
+    try {
+      sfxRef.current ??= new AudioEngine();
+      sfxRef.current.setLevel(0.38, false);
+      void sfxRef.current.cue(next, { suppressLoop: true }).catch(() => {});
+    } catch {
+      /* ignore autoplay block */
+    }
+  }
 
   // Animate synthetic audio level when demo state is listening or responding
   useEffect(() => {
@@ -372,7 +419,7 @@ export function LandingShowcase({
                 role="tab"
                 aria-selected={demoState === st.id}
                 className={demoState === st.id ? "lp-state-btn active" : "lp-state-btn"}
-                onClick={() => setDemoState(st.id)}
+                onClick={() => selectDemoState(st.id)}
               >
                 {st.label}
               </button>
@@ -751,6 +798,40 @@ export function LandingShowcase({
             </p>
           </article>
         </div>
+      </section>
+
+      {/* INTERACTIVE SCREENSHOT GALLERY */}
+      <section id="galeria" className="lp-section">
+        <div className="lp-section-head">
+          <span className="lp-eyebrow">GALERIA DO APLICATIVO</span>
+          <h2>Veja cada modo de operação em alta definição</h2>
+          <p>
+            Capturas reais geradas diretamente da versão empacotada para Windows (WebView2 +
+            WebGL2).
+          </p>
+        </div>
+
+        <div className="lp-gallery-tabs" role="tablist">
+          {GALLERY_SLIDES.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              role="tab"
+              aria-selected={activeSlide === s.id}
+              className={activeSlide === s.id ? "lp-gallery-tab active" : "lp-gallery-tab"}
+              onClick={() => setActiveSlide(s.id)}
+            >
+              <strong>{s.title}</strong>
+              <span>{s.subtitle}</span>
+            </button>
+          ))}
+        </div>
+
+        {GALLERY_SLIDES.filter((s) => s.id === activeSlide).map((slide) => (
+          <div key={slide.id} className="lp-gallery-frame">
+            <img src={slide.img} alt={slide.title} loading="lazy" />
+          </div>
+        ))}
       </section>
 
       {/* ARCHITECTURE COMPARISON TABLE */}

@@ -4564,6 +4564,60 @@ body.mascot-window-root {
   color: #97bacf;
 }
 
+/* Interactive Screenshot Gallery */
+.lp-gallery-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.lp-gallery-tab {
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(var(--accent-rgb), 0.2);
+  background: rgba(4, 13, 24, 0.76);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  text-align: left;
+  color: #cde8f7;
+}
+
+.lp-gallery-tab strong {
+  font-size: 13px;
+  color: #f0faff;
+}
+
+.lp-gallery-tab span {
+  font-size: 11px;
+  line-height: 1.45;
+  color: #84a8be;
+}
+
+.lp-gallery-tab.active {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.15);
+  box-shadow: 0 0 22px rgba(var(--accent-rgb), 0.18);
+}
+
+.lp-gallery-frame {
+  border-radius: 22px;
+  border: 1px solid rgba(var(--accent-rgb), 0.34);
+  background: rgba(3, 10, 18, 0.9);
+  padding: 10px;
+  box-shadow: 0 24px 68px rgba(0, 0, 0, 0.7), 0 0 36px rgba(var(--accent-rgb), 0.14);
+  overflow: hidden;
+}
+
+.lp-gallery-frame img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 14px;
+}
+
 /* Comparison Table */
 .lp-table-wrap {
   border-radius: 20px;
