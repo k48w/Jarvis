@@ -8,9 +8,12 @@
 //! ## Mapa dos Módulos Rust (`src-tauri/src/`)
 //! - [`config`]: Preferências (`config.json`) e cofre de segredos (Keyring + Windows DPAPI).
 //! - [`state`]: Estado compartilhado concorrente (`AppState`, aprovações 2FA, timers, subagentes).
-//! - [`llm`]: Streaming de chat, ciclo de ferramentas e subagentes (ChatGPT OAuth & Gemini).
-//! - [`tools`]: Catálogo de ferramentas (`ToolSpec`), política de permissões, proteção SSRF e automação Win32/DXGI.
-//! - [`knowledge`]: Base de Conhecimento Local (RAG em Rust com chunking por linha e busca BM25).
+//! - [`llm`]: Streaming de chat, ciclo de ferramentas e subagentes (ChatGPT OAuth, Gemini e IA Local Ollama/LM Studio).
+//! - [`tools`]: Catálogo modular (`tools/mod.rs`, `web.rs`, `screen.rs`, `files.rs`, `system.rs`), permissões e automação Win32/DXGI.
+//! - [`knowledge`]: Base de Conhecimento Local (RAG em Rust para código, Markdown, PDF, DOCX e XLSX com busca BM25).
+//! - [`mcp`]: Cliente nativo Model Context Protocol (Stdio e HTTP JSON-RPC 2.0) com descoberta dinâmica de ferramentas.
+//! - [`clipboard_history`]: Monitor leve da área de transferência (`Ctrl+C`) em RAM com filtro automático de segredos.
+//! - [`copilot`]: Modo Co-Pilot de Tela com diff visual local em Rust para jogos e debug.
 //! - [`updater`]: Verificador e instalador 1-clique de atualizações via GitHub Releases.
 //! - [`companion`]: Servidor HTTP/SSE mobile (`companion_ui.html`) com suporte a LAN, Tailscale e Túnel HTTPS.
 //! - [`routines`]: Skills (`/comandos`) e agendador de rotinas proativas em background.
@@ -23,11 +26,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod browser;
+mod clipboard_history;
 mod companion;
 mod config;
+mod copilot;
 mod google_oauth;
 mod knowledge;
 mod llm;
+mod mcp;
 mod mic;
 mod oauth;
 mod routines;
@@ -326,7 +332,20 @@ async fn add_project(
     path: String,
     name: Option<String>,
 ) -> Result<ProjectItem, String> {
-    storage::add_project(&state.data_dir, &path, name.as_deref())
+    let item = storage::add_project(&state.data_dir, &path, name.as_deref())?;
+    let auto_sync = state.config.read().await.kb_auto_sync_projects;
+    if auto_sync {
+        let data_dir = state.data_dir.clone();
+        let proj_path = item.path.clone();
+        let proj_name = item.name.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = tokio::task::spawn_blocking(move || {
+                knowledge::index_path(&data_dir, &proj_path, Some(proj_name))
+            })
+            .await;
+        });
+    }
+    Ok(item)
 }
 
 #[tauri::command]
@@ -1513,6 +1532,166 @@ async fn install_app_update(
     updater::download_and_launch_installer(&app, &download_url, &file_name).await
 }
 
+#[tauri::command]
+async fn list_local_models(
+    state: State<'_, Arc<AppState>>,
+    base_url: Option<String>,
+) -> Result<Vec<String>, String> {
+    let target = match base_url.filter(|s| !s.trim().is_empty()) {
+        Some(u) => u,
+        None => state.config.read().await.local_base_url.clone(),
+    };
+    llm::list_local_models(&state.http, &target).await
+}
+
+#[tauri::command]
+async fn reindex_all_knowledge(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<knowledge::KnowledgeSourceSummary>, String> {
+    let data_dir = state.data_dir.clone();
+    tokio::task::spawn_blocking(move || knowledge::reindex_all_sources(&data_dir))
+        .await
+        .map_err(|e| format!("Falha ao sincronizar Base RAG: {e}"))?
+}
+
+#[tauri::command]
+async fn list_clipboard_history(
+    clip: State<'_, Arc<clipboard_history::ClipboardHistoryState>>,
+) -> Result<Vec<clipboard_history::ClipboardHistoryEntry>, String> {
+    Ok(clip.list())
+}
+
+#[tauri::command]
+async fn clear_clipboard_history(
+    clip: State<'_, Arc<clipboard_history::ClipboardHistoryState>>,
+) -> Result<(), String> {
+    clip.clear();
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_clipboard_history_paused(
+    clip: State<'_, Arc<clipboard_history::ClipboardHistoryState>>,
+    paused: bool,
+) -> Result<bool, String> {
+    Ok(clip.set_paused(paused))
+}
+
+#[tauri::command]
+async fn get_clipboard_history_paused(
+    clip: State<'_, Arc<clipboard_history::ClipboardHistoryState>>,
+) -> Result<bool, String> {
+    Ok(clip.is_paused())
+}
+
+#[tauri::command]
+async fn list_mcp_servers(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<mcp::McpServerStatus>, String> {
+    let servers = mcp::list_servers(&state.data_dir);
+    let tools = state.mcp_cache.tools.read().await.clone();
+    let errors = state.mcp_cache.last_errors.read().await.clone();
+    Ok(servers
+        .into_iter()
+        .map(|srv| {
+            let matched: Vec<String> = tools
+                .iter()
+                .filter(|t| t.server_id == srv.id)
+                .map(|t| t.remote_name.clone())
+                .collect();
+            let last_error = errors.get(&srv.id).cloned();
+            mcp::McpServerStatus {
+                tool_count: matched.len(),
+                tools: matched,
+                last_error,
+                server: srv,
+            }
+        })
+        .collect())
+}
+
+#[tauri::command]
+async fn save_mcp_server(
+    state: State<'_, Arc<AppState>>,
+    name: String,
+    transport: String,
+    command: Option<String>,
+    args: Option<Vec<String>>,
+    url: Option<String>,
+    enabled: Option<bool>,
+) -> Result<Vec<mcp::McpServerStatus>, String> {
+    mcp::upsert_server(
+        &state.data_dir,
+        &name,
+        &transport,
+        command,
+        args.unwrap_or_default(),
+        url,
+        enabled.unwrap_or(true),
+    )?;
+    Ok(mcp::refresh_mcp_tools(&state.http, &state.data_dir, &state.mcp_cache).await)
+}
+
+#[tauri::command]
+async fn toggle_mcp_server(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    enabled: bool,
+) -> Result<Vec<mcp::McpServerStatus>, String> {
+    mcp::toggle_server(&state.data_dir, &id, enabled)?;
+    Ok(mcp::refresh_mcp_tools(&state.http, &state.data_dir, &state.mcp_cache).await)
+}
+
+#[tauri::command]
+async fn delete_mcp_server(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<Vec<mcp::McpServerStatus>, String> {
+    mcp::delete_server(&state.data_dir, &id)?;
+    Ok(mcp::refresh_mcp_tools(&state.http, &state.data_dir, &state.mcp_cache).await)
+}
+
+#[tauri::command]
+async fn refresh_mcp_servers(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<mcp::McpServerStatus>, String> {
+    Ok(mcp::refresh_mcp_tools(&state.http, &state.data_dir, &state.mcp_cache).await)
+}
+
+#[tauri::command]
+async fn start_screen_copilot(
+    app: AppHandle,
+    copilot_ctrl: State<'_, Arc<copilot::ScreenCopilotController>>,
+    target_window: Option<String>,
+    interval_secs: Option<u64>,
+    threshold_pct: Option<f32>,
+    focus_goal: Option<String>,
+) -> Result<copilot::ScreenCopilotStatus, String> {
+    Ok(copilot_ctrl
+        .start(
+            app,
+            target_window,
+            interval_secs.unwrap_or(8),
+            threshold_pct.unwrap_or(8.0),
+            focus_goal,
+        )
+        .await)
+}
+
+#[tauri::command]
+async fn stop_screen_copilot(
+    copilot_ctrl: State<'_, Arc<copilot::ScreenCopilotController>>,
+) -> Result<copilot::ScreenCopilotStatus, String> {
+    Ok(copilot_ctrl.stop().await)
+}
+
+#[tauri::command]
+async fn get_screen_copilot_status(
+    copilot_ctrl: State<'_, Arc<copilot::ScreenCopilotController>>,
+) -> Result<copilot::ScreenCopilotStatus, String> {
+    Ok(copilot_ctrl.status().await)
+}
+
 fn setup_tray(app: &AppHandle, state: Arc<AppState>) -> tauri::Result<()> {
     let toggle_item = MenuItem::with_id(
         app,
@@ -1616,6 +1795,9 @@ fn main() {
             app.manage(Arc::clone(&app_state));
             app.manage(Arc::new(mic::MicController::default()));
             app.manage(Arc::new(terminal::TerminalController::default()));
+            let clip_history = Arc::new(clipboard_history::ClipboardHistoryState::default());
+            app.manage(Arc::clone(&clip_history));
+            app.manage(Arc::new(copilot::ScreenCopilotController::default()));
             let companion_state = Arc::new(companion::CompanionState::new());
             companion_state
                 .enabled
@@ -1628,6 +1810,15 @@ fn main() {
             }
             app.manage(Arc::clone(&companion_state));
             routines::start_routines_scheduler(app.handle().clone(), app_state.data_dir.clone());
+            clipboard_history::start_clipboard_watcher(app.handle().clone(), clip_history);
+            {
+                let st_mcp = Arc::clone(&app_state);
+                tauri::async_runtime::spawn(async move {
+                    let _ =
+                        mcp::refresh_mcp_tools(&st_mcp.http, &st_mcp.data_dir, &st_mcp.mcp_cache)
+                            .await;
+                });
+            }
             companion::start_companion_server(
                 app.handle().clone(),
                 Arc::clone(&app_state),
@@ -1773,8 +1964,22 @@ fn main() {
             index_knowledge_path,
             remove_knowledge_source,
             search_knowledge_base,
+            reindex_all_knowledge,
             check_app_update,
             install_app_update,
+            list_local_models,
+            list_clipboard_history,
+            clear_clipboard_history,
+            set_clipboard_history_paused,
+            get_clipboard_history_paused,
+            list_mcp_servers,
+            save_mcp_server,
+            toggle_mcp_server,
+            delete_mcp_server,
+            refresh_mcp_servers,
+            start_screen_copilot,
+            stop_screen_copilot,
+            get_screen_copilot_status,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run the JARVIS desktop application");

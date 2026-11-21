@@ -36,27 +36,43 @@ import { listAudioInputDevices, openMicStream } from "./voice";
 import {
   allowCompanionFirewall,
   checkAppUpdate,
+  clearClipboardHistory,
+  deleteMcpServer,
+  getClipboardHistoryPaused,
   getCompanionInfo,
+  getScreenCopilotStatus,
   indexKnowledgePath,
   installAppUpdate,
   isTauri,
+  listClipboardHistory,
   listKnowledgeSources,
+  listLocalModels,
+  listMcpServers,
   listMicrophones,
+  onClipboardHistoryUpdated,
   onMicTestError,
   onMicTestLevel,
   onUpdateProgress,
   pickProjectFolder,
+  refreshMcpServers,
   regenerateCompanionToken,
+  reindexAllKnowledge,
   removeKnowledgeSource,
+  saveMcpServer,
   searchKnowledgeBase,
+  setClipboardHistoryPaused,
   setCompanionEnabled,
   setCompanionExternalUrl,
   setCompanionLanEnabled,
   startNativeMicTest,
+  startScreenCopilot,
   stopNativeMicTest,
+  stopScreenCopilot,
+  toggleMcpServer,
   type AllKeyStatus,
   type AppConfig,
   type ChatGptAuthStatus,
+  type ClipboardHistoryEntry,
   type CompanionInfo,
   type ConnectionTestResult,
   type ConversationSummary,
@@ -66,10 +82,12 @@ import {
   type KeySlot,
   type KnowledgeHit,
   type KnowledgeSourceSummary,
+  type McpServerStatus,
   type MemoryItem,
   type PermissionMode,
   type ProjectItem,
   type Provider,
+  type ScreenCopilotStatus,
   type StoredMessage,
   type SttEngine,
   type TtsEngine,
@@ -80,8 +98,8 @@ import {
 import type { VisualTheme } from "./Stage";
 
 export type Quality = "Low" | "High" | "Ultra";
-export type HistoryTab = "conversations" | "memory" | "knowledge";
-export type SettingsTab = "ai" | "voice" | "system" | "visual" | "mobile";
+export type HistoryTab = "conversations" | "memory" | "knowledge" | "clipboard";
+export type SettingsTab = "ai" | "voice" | "system" | "visual" | "mobile" | "mcp";
 
 interface HistoryDrawerProps {
   tab: HistoryTab;
@@ -102,6 +120,7 @@ interface HistoryDrawerProps {
   onDeleteProject: (id: string) => Promise<void>;
   onAddMemory: (content: string) => Promise<void>;
   onDeleteMemory: (id: string) => Promise<void>;
+  onQuickPrompt?: (prompt: string) => void;
   onClose: () => void;
 }
 
@@ -124,6 +143,7 @@ export function HistoryDrawer({
   onDeleteProject,
   onAddMemory,
   onDeleteMemory,
+  onQuickPrompt,
   onClose,
 }: HistoryDrawerProps) {
   const [memoryDraft, setMemoryDraft] = useState("");
@@ -142,11 +162,37 @@ export function HistoryDrawer({
   const [kbBusy, setKbBusy] = useState(false);
   const [kbStatus, setKbStatus] = useState<string | null>(null);
 
+  // Histórico Inteligente de Clipboard (Ctrl+C)
+  const [clipItems, setClipItems] = useState<ClipboardHistoryEntry[]>([]);
+  const [clipPaused, setClipPaused] = useState(false);
+
   useEffect(() => {
     void listKnowledgeSources()
       .then(setKbSources)
       .catch(() => {});
+    void listClipboardHistory()
+      .then(setClipItems)
+      .catch(() => {});
+    void getClipboardHistoryPaused()
+      .then(setClipPaused)
+      .catch(() => {});
   }, [tab]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void onClipboardHistoryUpdated((entry) => {
+      if (disposed) return;
+      setClipItems((prev) => [entry, ...prev.filter((i) => i.id !== entry.id)].slice(0, 20));
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   async function handleIndexFolderPicker() {
     setKbStatus(null);
@@ -414,6 +460,14 @@ export function HistoryDrawer({
         >
           Base RAG ({kbSources.length})
         </button>
+        <button
+          role="tab"
+          aria-selected={tab === "clipboard"}
+          className={tab === "clipboard" ? "tab active" : "tab"}
+          onClick={() => onTabChange("clipboard")}
+        >
+          Clipboard ({clipItems.length})
+        </button>
       </div>
 
       {tab === "conversations" ? (
@@ -625,7 +679,7 @@ export function HistoryDrawer({
             )}
           </div>
         </div>
-      ) : (
+      ) : tab === "knowledge" ? (
         <div className="drawer-body">
           <div className="conv-top-actions">
             <button
@@ -636,7 +690,30 @@ export function HistoryDrawer({
             >
               <FolderPlus /> Indexar pasta local
             </button>
+            <button
+              type="button"
+              className="mini-btn"
+              disabled={kbBusy || kbSources.length === 0}
+              onClick={async () => {
+                setKbBusy(true);
+                setKbStatus(null);
+                try {
+                  const synced = await reindexAllKnowledge();
+                  setKbSources(synced);
+                  setKbStatus(`Sincronizadas ${synced.length} fonte(s) (código, PDF, DOCX e XLSX).`);
+                } catch (err) {
+                  setKbStatus(String(err));
+                } finally {
+                  setKbBusy(false);
+                }
+              }}
+            >
+              <RefreshCw size={13} /> Sincronizar tudo
+            </button>
           </div>
+          <small className="hint-line">
+            Suporta código-fonte, Markdown, <strong>PDF</strong>, <strong>DOCX</strong> e planilhas <strong>XLSX / CSV</strong> (bloqueando .env, .ssh e chaves).
+          </small>
 
           <form className="memory-form" onSubmit={(e) => void handleIndexManualKbPath(e)}>
             <input
@@ -736,6 +813,90 @@ export function HistoryDrawer({
                 ))
               )}
             </div>
+          </div>
+        </div>
+      ) : (
+        <div className="drawer-body">
+          <div className="conv-top-actions">
+            <button
+              type="button"
+              className={clipPaused ? "mini-btn accent" : "mini-btn"}
+              onClick={async () => {
+                const next = await setClipboardHistoryPaused(!clipPaused);
+                setClipPaused(next);
+              }}
+            >
+              {clipPaused ? "Retomar captura" : "Pausar captura"}
+            </button>
+            <button
+              type="button"
+              className="mini-btn"
+              disabled={clipItems.length === 0}
+              onClick={async () => {
+                await clearClipboardHistory();
+                setClipItems([]);
+              }}
+            >
+              <Trash2 size={13} /> Limpar
+            </button>
+          </div>
+          <small className="hint-line">
+            Mantido apenas em RAM (últimos 20 itens). Senhas, tokens e chaves de API são ignorados automaticamente.
+          </small>
+          <div className="memory-list">
+            {clipItems.length === 0 ? (
+              <p className="empty-hint">
+                Nenhum trecho copiado ainda. Copie qualquer código, erro ou texto com Ctrl+C para usar ações rápidas aqui.
+              </p>
+            ) : (
+              clipItems.map((item) => (
+                <div
+                  key={item.id}
+                  className="memory-item"
+                  style={{ flexDirection: "column", alignItems: "stretch", gap: "6px" }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11.5px", opacity: 0.8 }}>
+                    <strong>{item.kind.toUpperCase()}</strong>
+                    <span>{item.chars} chars</span>
+                  </div>
+                  <div style={{ fontSize: "12.5px", wordBreak: "break-word" }}>{item.preview}</div>
+                  {onQuickPrompt && (
+                    <div className="inline-row" style={{ flexWrap: "wrap", gap: "6px" }}>
+                      <button
+                        type="button"
+                        className="mini-btn accent"
+                        onClick={() => {
+                          onQuickPrompt(`Explique e ajude com este trecho copiado:\n\n\`\`\`\n${item.text}\n\`\`\``);
+                          onClose();
+                        }}
+                      >
+                        Explicar
+                      </button>
+                      <button
+                        type="button"
+                        className="mini-btn"
+                        onClick={() => {
+                          onQuickPrompt(`Traduza para português do Brasil:\n\n${item.text}`);
+                          onClose();
+                        }}
+                      >
+                        Traduzir
+                      </button>
+                      <button
+                        type="button"
+                        className="mini-btn"
+                        onClick={() => {
+                          onQuickPrompt(`Resuma de forma direta em tópicos:\n\n${item.text}`);
+                          onClose();
+                        }}
+                      >
+                        Resumir
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
           </div>
         </div>
       )}
@@ -863,6 +1024,38 @@ export function SettingsDrawer({
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateMsg, setUpdateMsg] = useState<string | null>(null);
   const [updateProgress, setUpdateProgress] = useState<UpdateProgressEvent | null>(null);
+
+  // IA Local Offline (Ollama / LM Studio)
+  const [localModels, setLocalModels] = useState<string[]>([]);
+  const [localBusy, setLocalBusy] = useState(false);
+  const [localMsg, setLocalMsg] = useState<string | null>(null);
+
+  // Integrações MCP
+  const [mcpServers, setMcpServers] = useState<McpServerStatus[]>([]);
+  const [mcpBusy, setMcpBusy] = useState(false);
+  const [mcpMsg, setMcpMsg] = useState<string | null>(null);
+  const [mcpName, setMcpName] = useState("");
+  const [mcpTransport, setMcpTransport] = useState<"http" | "stdio">("http");
+  const [mcpUrl, setMcpUrl] = useState("");
+  const [mcpCommand, setMcpCommand] = useState("");
+  const [mcpArgs, setMcpArgs] = useState("");
+
+  // Co-Pilot de Tela (Jogos & Debug)
+  const [copilotStatus, setCopilotStatus] = useState<ScreenCopilotStatus | null>(null);
+  const [copilotWindow, setCopilotWindow] = useState("");
+  const [copilotInterval, setCopilotInterval] = useState(8);
+  const [copilotThreshold, setCopilotThreshold] = useState(8);
+  const [copilotGoal, setCopilotGoal] = useState("");
+  const [copilotBusy, setCopilotBusy] = useState(false);
+
+  useEffect(() => {
+    if (tab === "mcp") {
+      void listMcpServers().then(setMcpServers).catch(() => {});
+    }
+    if (tab === "system") {
+      void getScreenCopilotStatus().then(setCopilotStatus).catch(() => {});
+    }
+  }, [tab]);
 
   useEffect(() => {
     let disposed = false;
@@ -1132,6 +1325,7 @@ export function SettingsDrawer({
             ["system", "Sistema"],
             ["visual", "Visual"],
             ["mobile", "Celular"],
+            ["mcp", "MCP"],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -1161,8 +1355,96 @@ export function SettingsDrawer({
               >
                 <option value="chatgpt">ChatGPT Plus / Pro (OAuth)</option>
                 <option value="gemini">Google Gemini</option>
+                <option value="local">IA Local Offline (Ollama / LM Studio)</option>
               </select>
             </label>
+
+            {config.provider === "local" && (
+              <div className="oauth-card">
+                <div className="field-label-row">
+                  <span>Servidor IA Local (100% Offline &amp; Privado)</span>
+                </div>
+                <div className="inline-row" style={{ marginBottom: "8px", gap: "6px" }}>
+                  <button
+                    type="button"
+                    className="mini-btn"
+                    onClick={() =>
+                      void onUpdateConfig({ local_base_url: "http://127.0.0.1:11434/v1" })
+                    }
+                  >
+                    Preset Ollama (11434)
+                  </button>
+                  <button
+                    type="button"
+                    className="mini-btn"
+                    onClick={() =>
+                      void onUpdateConfig({ local_base_url: "http://127.0.0.1:1234/v1" })
+                    }
+                  >
+                    Preset LM Studio (1234)
+                  </button>
+                </div>
+                <label>
+                  URL Base OpenAI-Compatível
+                  <input
+                    type="url"
+                    value={config.local_base_url}
+                    placeholder="http://127.0.0.1:11434/v1"
+                    onChange={(e) => void onUpdateConfig({ local_base_url: e.target.value })}
+                  />
+                </label>
+                <div className="field-block">
+                  <div className="field-label-row">
+                    <span>Modelo Local Ativo</span>
+                    <button
+                      type="button"
+                      className="mini-btn accent"
+                      disabled={localBusy}
+                      onClick={async () => {
+                        setLocalBusy(true);
+                        setLocalMsg(null);
+                        try {
+                          const found = await listLocalModels(config.local_base_url);
+                          setLocalModels(found);
+                          setLocalMsg(`${found.length} modelo(s) local(is) detectado(s).`);
+                          if (found.length > 0 && !found.includes(config.local_model)) {
+                            await onUpdateConfig({ local_model: found[0] });
+                          }
+                        } catch (err) {
+                          setLocalMsg(String(err));
+                        } finally {
+                          setLocalBusy(false);
+                        }
+                      }}
+                    >
+                      {localBusy ? <Loader2 className="spin" size={13} /> : <RefreshCw size={13} />}
+                      Detectar Modelos
+                    </button>
+                  </div>
+                  {localModels.length > 0 ? (
+                    <select
+                      aria-label="Modelo local"
+                      value={config.local_model}
+                      onChange={(e) => void onUpdateConfig({ local_model: e.target.value })}
+                    >
+                      {localModels.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      value={config.local_model}
+                      placeholder="Ex.: qwen2.5:7b, llama3.2, deepseek-r1:8b"
+                      onChange={(e) => void onUpdateConfig({ local_model: e.target.value })}
+                    />
+                  )}
+                  {localMsg && <small className="hint-line">{localMsg}</small>}
+                </div>
+              </div>
+            )}
 
             {config.provider === "gemini" && (
               <>
@@ -1895,6 +2177,112 @@ export function SettingsDrawer({
               Minimizar para a bandeja ao fechar janela
             </label>
 
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={config.kb_auto_sync_projects}
+                onChange={(e) =>
+                  void onUpdateConfig({ kb_auto_sync_projects: e.target.checked })
+                }
+              />
+              Indexar automaticamente projetos na Base RAG ao vincular pasta
+            </label>
+
+            <div className="field-block">
+              <div className="field-label-row">
+                <span>Modo Co-Pilot de Tela (Jogos &amp; Debug)</span>
+                <small className={copilotStatus?.active ? "ok-tag" : ""}>
+                  {copilotStatus?.active ? "Observando" : "Desligado"}
+                </small>
+              </div>
+              <small className="hint-line">
+                Calcula diferença visual localmente em Rust (0 créditos quando a tela não muda) e dispara dica curta ao detectar mudanças relevantes.
+              </small>
+              <input
+                type="text"
+                value={copilotWindow}
+                placeholder="Janela alvo opcional (ex.: Minecraft, Valorant, VS Code — vazio = tela toda)"
+                aria-label="Janela alvo do Co-Pilot de Tela"
+                onChange={(e) => setCopilotWindow(e.target.value)}
+              />
+              <input
+                type="text"
+                value={copilotGoal}
+                placeholder="Objetivo opcional (ex.: Me avise erros no terminal ou dicas táticas)"
+                aria-label="Objetivo do Co-Pilot de Tela"
+                onChange={(e) => setCopilotGoal(e.target.value)}
+              />
+              <div className="inline-row" style={{ gap: "8px" }}>
+                <label style={{ flex: 1 }}>
+                  Intervalo (s)
+                  <input
+                    type="number"
+                    min={4}
+                    max={60}
+                    value={copilotInterval}
+                    onChange={(e) => setCopilotInterval(Number(e.target.value) || 8)}
+                  />
+                </label>
+                <label style={{ flex: 1 }}>
+                  Mudança mín. (%)
+                  <input
+                    type="number"
+                    min={2}
+                    max={50}
+                    value={copilotThreshold}
+                    onChange={(e) => setCopilotThreshold(Number(e.target.value) || 8)}
+                  />
+                </label>
+              </div>
+              <div className="inline-row">
+                {copilotStatus?.active ? (
+                  <button
+                    type="button"
+                    className="mini-btn"
+                    disabled={copilotBusy}
+                    onClick={async () => {
+                      setCopilotBusy(true);
+                      try {
+                        setCopilotStatus(await stopScreenCopilot());
+                      } finally {
+                        setCopilotBusy(false);
+                      }
+                    }}
+                  >
+                    Parar Co-Pilot
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="mini-btn accent"
+                    disabled={copilotBusy}
+                    onClick={async () => {
+                      setCopilotBusy(true);
+                      try {
+                        setCopilotStatus(
+                          await startScreenCopilot({
+                            targetWindow: copilotWindow.trim() || null,
+                            intervalSecs: copilotInterval,
+                            thresholdPct: copilotThreshold,
+                            focusGoal: copilotGoal.trim() || null,
+                          }),
+                        );
+                      } finally {
+                        setCopilotBusy(false);
+                      }
+                    }}
+                  >
+                    Ativar Co-Pilot de Tela
+                  </button>
+                )}
+                {copilotStatus && (
+                  <small className="hint-line">
+                    Quadros: {copilotStatus.framesChecked} · Alertas: {copilotStatus.triggersSent} · Último Δ: {copilotStatus.lastDeltaPct.toFixed(1)}%
+                  </small>
+                )}
+              </div>
+            </div>
+
             <div className="field-block">
               <div className="field-label-row">
                 <span>Atualizações do Aplicativo (GitHub Releases)</span>
@@ -2302,6 +2690,189 @@ export function SettingsDrawer({
                 </div>
               </>
             )}
+          </div>
+        )}
+
+        {tab === "mcp" && (
+          <div className="companion-tab">
+            <p className="hint-box">
+              Conecte servidores <strong>Model Context Protocol (MCP)</strong> externos (GitHub, Notion, Postgres, Spotify ou ferramentas locais). As ferramentas descobertas são disponibilizadas automaticamente para ChatGPT, Gemini e IA Local sob a política de permissões.
+            </p>
+
+            <div className="field-block">
+              <div className="field-label-row">
+                <span>Adicionar Servidor MCP</span>
+                <button
+                  type="button"
+                  className="mini-btn"
+                  disabled={mcpBusy}
+                  onClick={async () => {
+                    setMcpBusy(true);
+                    setMcpMsg(null);
+                    try {
+                      const list = await refreshMcpServers();
+                      setMcpServers(list);
+                      setMcpMsg("Ferramentas MCP sincronizadas.");
+                    } catch (err) {
+                      setMcpMsg(String(err));
+                    } finally {
+                      setMcpBusy(false);
+                    }
+                  }}
+                >
+                  <RefreshCw size={13} /> Redescobrir
+                </button>
+              </div>
+              <input
+                type="text"
+                value={mcpName}
+                placeholder="Nome (ex.: GitHub, Notion, Postgres)"
+                aria-label="Nome do servidor MCP"
+                onChange={(e) => setMcpName(e.target.value)}
+              />
+              <select
+                aria-label="Transporte MCP"
+                value={mcpTransport}
+                onChange={(e) => setMcpTransport(e.target.value as "http" | "stdio")}
+              >
+                <option value="http">HTTP / Streamable HTTP (JSON-RPC)</option>
+                <option value="stdio">Stdio Local (Processo npx / python / uvx)</option>
+              </select>
+
+              {mcpTransport === "http" ? (
+                <input
+                  type="url"
+                  value={mcpUrl}
+                  placeholder="https://meu-servidor-mcp.exemplo/mcp"
+                  aria-label="URL do servidor MCP"
+                  onChange={(e) => setMcpUrl(e.target.value)}
+                />
+              ) : (
+                <>
+                  <input
+                    type="text"
+                    value={mcpCommand}
+                    placeholder="Comando (ex.: npx, uvx, python)"
+                    aria-label="Comando executável MCP"
+                    onChange={(e) => setMcpCommand(e.target.value)}
+                  />
+                  <input
+                    type="text"
+                    value={mcpArgs}
+                    placeholder="Argumentos separados por espaço (ex.: -y @modelcontextprotocol/server-github)"
+                    aria-label="Argumentos MCP"
+                    onChange={(e) => setMcpArgs(e.target.value)}
+                  />
+                </>
+              )}
+
+              <button
+                type="button"
+                className="mini-btn accent"
+                disabled={mcpBusy || !mcpName.trim()}
+                onClick={async () => {
+                  setMcpBusy(true);
+                  setMcpMsg(null);
+                  try {
+                    const parsedArgs = mcpArgs
+                      .trim()
+                      .split(/\s+/)
+                      .filter(Boolean);
+                    const next = await saveMcpServer({
+                      name: mcpName.trim(),
+                      transport: mcpTransport,
+                      url: mcpTransport === "http" ? mcpUrl.trim() : null,
+                      command: mcpTransport === "stdio" ? mcpCommand.trim() : null,
+                      args: mcpTransport === "stdio" ? parsedArgs : [],
+                      enabled: true,
+                    });
+                    setMcpServers(next);
+                    setMcpName("");
+                    setMcpUrl("");
+                    setMcpCommand("");
+                    setMcpArgs("");
+                    setMcpMsg("Servidor MCP salvo e ferramentas consultadas.");
+                  } catch (err) {
+                    setMcpMsg(String(err));
+                  } finally {
+                    setMcpBusy(false);
+                  }
+                }}
+              >
+                <Plus size={13} /> Conectar Servidor MCP
+              </button>
+              {mcpMsg && <small className="hint-line">{mcpMsg}</small>}
+            </div>
+
+            <div className="memory-list">
+              {mcpServers.length === 0 ? (
+                <p className="empty-hint">
+                  Nenhum servidor MCP configurado ainda.
+                </p>
+              ) : (
+                mcpServers.map((item) => (
+                  <div
+                    key={item.server.id}
+                    className="memory-item"
+                    style={{ flexDirection: "column", alignItems: "stretch", gap: "6px" }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <strong>
+                        {item.server.name} ({item.server.transport.toUpperCase()})
+                      </strong>
+                      <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                        <label style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "11.5px" }}>
+                          <input
+                            type="checkbox"
+                            checked={item.server.enabled}
+                            disabled={mcpBusy}
+                            onChange={async (e) => {
+                              setMcpBusy(true);
+                              try {
+                                setMcpServers(
+                                  await toggleMcpServer(item.server.id, e.target.checked),
+                                );
+                              } finally {
+                                setMcpBusy(false);
+                              }
+                            }}
+                          />
+                          Ativo
+                        </label>
+                        <button
+                          type="button"
+                          className="icon-tiny"
+                          aria-label={`Remover servidor MCP ${item.server.name}`}
+                          disabled={mcpBusy}
+                          onClick={async () => {
+                            setMcpBusy(true);
+                            try {
+                              setMcpServers(await deleteMcpServer(item.server.id));
+                            } finally {
+                              setMcpBusy(false);
+                            }
+                          }}
+                        >
+                          <Trash2 />
+                        </button>
+                      </div>
+                    </div>
+                    <small style={{ opacity: 0.78, fontSize: "11.5px" }}>
+                      {item.server.transport === "http"
+                        ? item.server.url
+                        : `${item.server.command ?? ""} ${item.server.args.join(" ")}`}
+                    </small>
+                    <small className={item.lastError ? "warn-tag" : "ok-tag"}>
+                      {item.lastError
+                        ? item.lastError
+                        : `${item.toolCount} ferramenta(s) descoberta(s)${
+                            item.tools.length > 0 ? `: ${item.tools.slice(0, 6).join(", ")}` : ""
+                          }`}
+                    </small>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         )}
       </div>

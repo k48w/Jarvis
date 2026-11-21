@@ -16,15 +16,17 @@ Assistente desktop nativo para Windows construído em **Tauri 2, Rust (Win32 + T
 
 ## Principais Recursos
 
-### Produtividade, Código & Conhecimento
-- **Base de Conhecimento Local (RAG em Rust)** — indexa pastas de projetos, códigos e documentações locais com numeração exata de linhas (`start_line..=end_line`) e busca híbrida **BM25 + correspondência exata** (`kb_index_path`, `kb_search`, `kb_list`, `kb_remove` + aba **Base RAG**), bloqueando automaticamente `.env`, `.ssh`, chaves privadas e pastas de sistema.
+### Produtividade, Código, IA Offline & Conhecimento
+- **IA 100% Local / Offline (Ollama & LM Studio)** — além de **ChatGPT (OAuth)** e **Google Gemini**, alterne para modelos locais (`qwen2.5`, `llama3.2`, `deepseek-r1`) com detecção automática de modelos em **Ajustes → IA**, custo zero e privacidade total.
+- **Base de Conhecimento Local (RAG em Rust)** — indexa pastas de projetos, código-fonte, Markdown, **PDF**, **DOCX** e planilhas **XLSX / CSV** com sincronização automática de projetos, numeração exata de linhas (`start_line..=end_line`) e busca híbrida **BM25 + correspondência exata** (`kb_index_path`, `kb_search`, `kb_list`, `kb_remove` + aba **Base RAG**), bloqueando automaticamente `.env`, `.ssh`, chaves privadas e pastas de sistema.
+- **Cliente Nativo MCP (Model Context Protocol)** — conecte servidores externos via **HTTP/Streamable HTTP** ou **Stdio local** (`npx`, `python`, `uvx`) em **Ajustes → MCP**; as ferramentas descobertas entram automaticamente no catálogo sob aprovação 2FA.
+- **Histórico Inteligente de Clipboard (`Ctrl+C`)** — guarda os últimos 20 trechos copiados apenas em RAM (ignorando senhas, JWTs e chaves de API automaticamente) com ações 1-clique (**Explicar**, **Traduzir**, **Resumir**) na aba **Clipboard**.
 - **Terminal ao vivo e Git nativo** — terminal PowerShell com saída em streaming e cancelamento em tempo real (`run_terminal`), barra Git integrada (`git_status`, `git_diff`, `git_log`, `git_commit`) e diff colorido com desfazer em 1 clique.
-- **Agentes em paralelo** — até 3 subagentes rodando em segundo plano ao mesmo tempo (Pesquisador, Programador, Automação); ao finalizar, o Jarvis fala e salva o resumo diretamente na conversa.
-- **Skills (`/comando`) e rotinas agendadas** — macros reutilizáveis como `/briefing`, `/saude-pc`, `/foco` e `/git-review`, mais agendador em background (horário diário `HH:MM` ou por intervalo).
+- **Agentes em paralelo, Skills (`/comando`) e rotinas agendadas** — até 3 subagentes em segundo plano, macros reutilizáveis (`/briefing`, `/saude-pc`, `/foco`, `/git-review`) e agendador em background.
 
-### Voz, Visão & Presença no Windows
+### Voz, Visão & Co-Pilot de Tela
 - **Voz nativa sem desperdício de créditos** — captura via Win32 `waveIn` (16 kHz) com detecção de silêncio local (VAD), Wake Word `"Ei, Jarvis"`, modo mãos-livres, transcrição (ElevenLabs Scribe / Gemini) e fala ElevenLabs com cache SHA-256 em disco.
-- **Visão de janelas e jogos** — lista janelas abertas e captura alvos específicos com `PrintWindow` e fallback **DXGI Desktop Duplication** (protegido contra concorrência por `ScreenCaptureGuard`), além de ler prints e texto do `Ctrl+C`.
+- **Visão de janelas, jogos e Modo Co-Pilot de Tela** — lista janelas abertas e captura alvos específicos com `PrintWindow` e fallback **DXGI Desktop Duplication** (`ScreenCaptureGuard`). No **Modo Co-Pilot de Tela**, calcula a diferença visual localmente em Rust (`Δ pixel` — 0 créditos na tela parada) e envia dicas táticas curtas quando a cena ou logs mudam.
 - **Navegador integrado (WebView2 + CDP)** — painel acoplado lado a lado quando você pede para abrir ou interagir com uma página; buscas comuns acontecem silenciosamente em segundo plano.
 - **Atalhos e Mascote** — chamada instantânea por `Alt + Space`, paleta de comandos `Ctrl + K` e mascote flutuante sempre no topo.
 

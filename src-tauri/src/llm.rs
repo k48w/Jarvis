@@ -256,7 +256,12 @@ async fn run_gemini(
         })
         .collect();
 
-    let decls = tools::gemini_tool_declarations(cfg.permission_mode, cfg.web_search_enabled);
+    let mcp_tools = state.mcp_cache.tools.read().await.clone();
+    let decls = tools::gemini_tool_declarations_with_mcp(
+        cfg.permission_mode,
+        cfg.web_search_enabled,
+        &mcp_tools,
+    );
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?alt=sse",
         cfg.gemini_model.trim()
@@ -440,7 +445,12 @@ async fn run_openai_responses(
         })
         .collect();
 
-    let decls = tools::responses_tool_declarations(cfg.permission_mode, cfg.web_search_enabled);
+    let mcp_tools = state.mcp_cache.tools.read().await.clone();
+    let decls = tools::responses_tool_declarations_with_mcp(
+        cfg.permission_mode,
+        cfg.web_search_enabled,
+        &mcp_tools,
+    );
     let url = "https://api.openai.com/v1/responses";
     let mut full_text = String::new();
     let mut active_model = if cfg.chatgpt_model.trim().is_empty() {
@@ -747,6 +757,298 @@ async fn run_openai_responses(
     Ok(full_text)
 }
 
+/// Normaliza a URL base local (Ollama `http://127.0.0.1:11434/v1` ou LM Studio `http://127.0.0.1:1234/v1`).
+pub fn normalize_local_base_url(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim().trim_end_matches('/');
+    let base = if trimmed.is_empty() {
+        "http://127.0.0.1:11434/v1"
+    } else {
+        trimmed
+    };
+    let parsed = url::Url::parse(base).map_err(|e| format!("URL local inválida: {e}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("A URL do servidor local deve começar com http:// ou https://".to_string());
+    }
+    Ok(base.to_string())
+}
+
+/// Descobre modelos instalados no servidor local (Ollama ou LM Studio).
+pub async fn list_local_models(
+    http: &reqwest::Client,
+    raw_base_url: &str,
+) -> Result<Vec<String>, String> {
+    let base = normalize_local_base_url(raw_base_url)?;
+    let models_url = format!("{base}/models");
+    if let Ok(resp) = http
+        .get(&models_url)
+        .timeout(std::time::Duration::from_secs(6))
+        .send()
+        .await
+    {
+        if resp.status().is_success() {
+            if let Ok(val) = resp.json::<Value>().await {
+                let mut ids: Vec<String> = val["data"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|m| m["id"].as_str().map(|s| s.to_string()))
+                    .collect();
+                if !ids.is_empty() {
+                    ids.sort();
+                    ids.dedup();
+                    return Ok(ids);
+                }
+            }
+        }
+    }
+
+    // Fallback nativo do Ollama (`/api/tags`) caso `/v1/models` não esteja disponível
+    if let Ok(parsed) = url::Url::parse(&base) {
+        if let Some(host) = parsed.host_str() {
+            let port_part = parsed.port().map(|p| format!(":{p}")).unwrap_or_default();
+            let tags_url = format!("{}://{}{}/api/tags", parsed.scheme(), host, port_part);
+            if let Ok(resp) = http
+                .get(&tags_url)
+                .timeout(std::time::Duration::from_secs(6))
+                .send()
+                .await
+            {
+                if resp.status().is_success() {
+                    if let Ok(val) = resp.json::<Value>().await {
+                        let mut ids: Vec<String> = val["models"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|m| m["name"].as_str().map(|s| s.to_string()))
+                            .collect();
+                        if !ids.is_empty() {
+                            ids.sort();
+                            ids.dedup();
+                            return Ok(ids);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Err(format!(
+        "Nenhum servidor Ollama/LM Studio respondeu em '{base}'. Verifique se ele está rodando."
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_local_openai_compat(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    conv_id: &str,
+    cfg: &AppConfig,
+    system_prompt: &str,
+    history: &[StoredMessage],
+    latest_image: Option<&ImageAttachment>,
+    cancel_rx: &mut watch::Receiver<bool>,
+    tool_traces: &mut Vec<ToolTrace>,
+    response_mode: &mut String,
+) -> Result<String, String> {
+    let base = normalize_local_base_url(&cfg.local_base_url)?;
+    let url = format!("{base}/chat/completions");
+    let model = if cfg.local_model.trim().is_empty() {
+        "qwen2.5:7b".to_string()
+    } else {
+        cfg.local_model.trim().to_string()
+    };
+
+    let valid_history: Vec<&StoredMessage> = history
+        .iter()
+        .filter(|m| !m.text.trim().is_empty())
+        .collect();
+    let last_user_idx = valid_history.iter().rposition(|m| m.role == "user");
+
+    let mut messages: Vec<Value> = vec![json!({
+        "role": "system",
+        "content": system_prompt
+    })];
+    for (idx, m) in valid_history.iter().enumerate() {
+        let role = if m.role == "assistant" {
+            "assistant"
+        } else {
+            "user"
+        };
+        if Some(idx) == last_user_idx {
+            if let Some(img) = latest_image {
+                let data_url = format!("data:{};base64,{}", img.mime_type, img.data_base64);
+                messages.push(json!({
+                    "role": "user",
+                    "content": [
+                        { "type": "text", "text": m.text },
+                        { "type": "image_url", "image_url": { "url": data_url } }
+                    ]
+                }));
+                continue;
+            }
+        }
+        messages.push(json!({ "role": role, "content": m.text }));
+    }
+
+    let mcp_tools = state.mcp_cache.tools.read().await.clone();
+    let decls = tools::openai_chat_tool_declarations(
+        cfg.permission_mode,
+        cfg.web_search_enabled,
+        &mcp_tools,
+    );
+    let mut use_tools = !decls.is_empty();
+    let mut full_text = String::new();
+
+    for _round in 0..10 {
+        check_cancelled(cancel_rx)?;
+
+        let mut payload = json!({
+            "model": model,
+            "messages": messages,
+            "stream": true
+        });
+        if use_tools {
+            payload["tools"] = json!(decls);
+        }
+
+        let resp = state
+            .http
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| {
+                format!("Não foi possível conectar ao servidor local ({url}): {e}. Confirme se o Ollama ou LM Studio está aberto.")
+            })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let err_text = resp.text().await.unwrap_or_default();
+            // Alguns modelos locais menores não suportam tool-calling: tenta novamente sem `tools`
+            if use_tools
+                && (status.as_u16() == 400 || err_text.to_ascii_lowercase().contains("tool"))
+            {
+                use_tools = false;
+                continue;
+            }
+            return Err(format!(
+                "Servidor local ({model}) retornou HTTP {status}: {err_text}"
+            ));
+        }
+
+        let mut stream = resp.bytes_stream();
+        let mut sse_buf = String::new();
+        let mut round_text = String::new();
+        // index -> (call_id, name, arguments_json_str)
+        let mut pending_calls: BTreeMap<usize, (String, String, String)> = BTreeMap::new();
+
+        while let Some(chunk_res) = stream.next().await {
+            check_cancelled(cancel_rx)?;
+            let chunk = chunk_res.map_err(|e| format!("Erro no stream do modelo local: {e}"))?;
+            sse_buf.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(nl) = sse_buf.find('\n') {
+                let line = sse_buf[..nl].trim().to_string();
+                sse_buf.drain(..=nl);
+                let Some(data) = line.strip_prefix("data:") else {
+                    continue;
+                };
+                let data = data.trim();
+                if data.is_empty() || data == "[DONE]" {
+                    continue;
+                }
+                let Ok(ev) = serde_json::from_str::<Value>(data) else {
+                    continue;
+                };
+                let delta = &ev["choices"][0]["delta"];
+                if let Some(txt) = delta["content"].as_str() {
+                    if !txt.is_empty() {
+                        round_text.push_str(txt);
+                        full_text.push_str(txt);
+                        let _ = app.emit(
+                            "jarvis:chat-event",
+                            json!({
+                                "type": "delta",
+                                "conversationId": conv_id,
+                                "text": txt
+                            }),
+                        );
+                    }
+                }
+                if let Some(tcs) = delta["tool_calls"].as_array() {
+                    for tc in tcs {
+                        let idx = tc["index"].as_u64().unwrap_or(0) as usize;
+                        let entry = pending_calls.entry(idx).or_insert_with(|| {
+                            (
+                                format!("call_{}", &Uuid::new_v4().simple().to_string()[..8]),
+                                String::new(),
+                                String::new(),
+                            )
+                        });
+                        if let Some(id) = tc["id"].as_str().filter(|s| !s.is_empty()) {
+                            entry.0 = id.to_string();
+                        }
+                        if let Some(n) = tc["function"]["name"].as_str() {
+                            entry.1.push_str(n);
+                        }
+                        if let Some(a) = tc["function"]["arguments"].as_str() {
+                            entry.2.push_str(a);
+                        }
+                    }
+                }
+            }
+        }
+
+        if pending_calls.is_empty() {
+            break;
+        }
+
+        let assistant_calls: Vec<Value> = pending_calls
+            .values()
+            .map(|(cid, name, arg_s)| {
+                json!({
+                    "id": cid,
+                    "type": "function",
+                    "function": { "name": name, "arguments": arg_s }
+                })
+            })
+            .collect();
+        messages.push(json!({
+            "role": "assistant",
+            "content": if round_text.is_empty() { Value::Null } else { json!(round_text) },
+            "tool_calls": assistant_calls
+        }));
+
+        for (cid, name, arg_s) in pending_calls.into_values() {
+            check_cancelled(cancel_rx)?;
+            let parsed_args: Value = serde_json::from_str(&arg_s).unwrap_or_else(|_| json!({}));
+            let outcome =
+                tools::execute_tool_with_policy(app, state, conv_id, &cid, &name, &parsed_args)
+                    .await;
+            if outcome.triggered_alert {
+                *response_mode = "alert".to_string();
+            }
+            tool_traces.push(ToolTrace {
+                id: cid.clone(),
+                name: name.clone(),
+                title: tools::find_spec(&name)
+                    .map(|s| s.title.to_string())
+                    .unwrap_or_else(|| name.clone()),
+                status: outcome.status.clone(),
+                summary: outcome.summary.clone(),
+            });
+            messages.push(json!({
+                "role": "tool",
+                "tool_call_id": cid,
+                "content": outcome.output
+            }));
+        }
+    }
+
+    Ok(full_text)
+}
+
 pub async fn run_chat_turn(
     app: &AppHandle,
     state: &Arc<AppState>,
@@ -787,6 +1089,21 @@ pub async fn run_chat_turn(
         }
         Provider::Chatgpt => {
             run_openai_responses(
+                app,
+                state,
+                conv_id,
+                &cfg,
+                &system_prompt,
+                recent,
+                latest_image.as_ref(),
+                &mut cancel_rx,
+                &mut tool_traces,
+                &mut response_mode,
+            )
+            .await?
+        }
+        Provider::Local => {
+            run_local_openai_compat(
                 app,
                 state,
                 conv_id,
@@ -869,6 +1186,21 @@ pub async fn run_agent_turn(
         }
         Provider::Chatgpt => {
             run_openai_responses(
+                app,
+                state,
+                agent_id,
+                &cfg,
+                &system_prompt,
+                &single_msg,
+                None,
+                &mut cancel_rx,
+                &mut tool_traces,
+                &mut response_mode,
+            )
+            .await?
+        }
+        Provider::Local => {
+            run_local_openai_compat(
                 app,
                 state,
                 agent_id,
@@ -1314,6 +1646,15 @@ pub async fn test_provider_connection(state: &Arc<AppState>) -> ConnectionTestRe
                 },
             }
         }
+        Provider::Local => match list_local_models(&state.http, &cfg.local_base_url).await {
+            Ok(models) => Ok(format!(
+                "IA Local conectada em {} ({} modelo(s); ativo: {})",
+                cfg.local_base_url,
+                models.len(),
+                cfg.local_model
+            )),
+            Err(e) => Err(e),
+        },
     };
 
     let latency_ms = started.elapsed().as_millis() as u64;

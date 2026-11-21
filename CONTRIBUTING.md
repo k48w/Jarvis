@@ -26,12 +26,20 @@ Jarvis/
     ├── Cargo.toml               # Dependências Rust e features da crate `windows`
     └── src/
         ├── main.rs              # Ponto de entrada, System Tray, atalho global e todos os #[tauri::command]
-        ├── state.rs             # AppState concorrente (cancelamento por geração, fila 2FA, timers e agentes)
+        ├── state.rs             # AppState concorrente (cancelamento por geração, fila 2FA, timers, MCP cache)
         ├── config.rs            # Preferências (config.json) e cofre de segredos (Keyring + Windows DPAPI)
-        ├── llm.rs               # Cliente de streaming ChatGPT OAuth & Gemini + loop multi-turno de ferramentas
-        ├── tools.rs             # Catálogo ToolSpec, permissões, proteção SSRF e automação Win32/DXGI
-        ├── knowledge.rs         # Base de Conhecimento Local (RAG em Rust puro com chunking e busca BM25)
-        ├── updater.rs           # Auto-Updater 1-clique integrado ao GitHub Releases (validação HTTPS + PE "MZ")
+        ├── llm.rs               # Streaming ChatGPT OAuth, Gemini e IA Local (Ollama/LM Studio) + subagentes
+        ├── tools/               # Catálogo e executores de ferramentas divididos por domínio
+        │   ├── mod.rs           # ToolSpec, declarações OpenAI/Gemini/Local + MCP, política 2FA e roteador
+        │   ├── web.rs           # SSRF Guard (DNS + redirects), DuckDuckGo e leitura de páginas
+        │   ├── screen.rs        # DXGI, PrintWindow, ScreenCaptureGuard, SendInput e DIB clipboard
+        │   ├── files.rs         # Leitura/escrita segura, Diff + Undo 1-clique e Git nativo
+        │   └── system.rs        # Telemetria, CoreAudio volume, teclas de mídia, apps, PowerShell e timers
+        ├── knowledge.rs         # Base de Conhecimento Local (RAG BM25 para código, Markdown, PDF, DOCX, XLSX)
+        ├── clipboard_history.rs # Monitor leve de área de transferência (Ctrl+C) em RAM com filtro anti-senha
+        ├── mcp.rs               # Cliente nativo Model Context Protocol (Stdio e HTTP JSON-RPC 2.0)
+        ├── copilot.rs           # Modo Co-Pilot de Tela com detector local de diferença visual (Δ pixel)
+        ├── updater.rs           # Auto-Updater 1-clique integrado ao GitHub Releases (HTTPS por salto + PE/SHA-256)
         ├── companion.rs         # Servidor HTTP/SSE mobile (LAN, Tailscale VPN e Túnel HTTPS)
         ├── companion_ui.html    # App mobile PWA single-file servido pelo companion.rs
         ├── routines.rs          # Persistência de Skills (/slug) e agendador de rotinas em background
@@ -48,11 +56,11 @@ Jarvis/
 
 ## 2. Receitas Rápidas ("Onde mexer para...")
 
-### A. Como adicionar uma nova ferramenta para a IA (`tools.rs`)
-Todas as ferramentas do ChatGPT e do Gemini são geradas automaticamente a partir de uma única tabela em `src-tauri/src/tools.rs`:
-1. **`tool_catalog()` (`src-tauri/src/tools.rs`)**: adicione um novo `ToolSpec` com `name`, `title`, `description`, `risk` (`ToolRisk::Read` para leitura ou `ToolRisk::Action` para ações que exigem aprovação no modo Revisão) e o schema JSON em `parameters`.
-2. **`summarize_tool_args()` (`src-tauri/src/tools.rs`)**: adicione uma linha no `match name` para exibir um resumo amigável no chip da ferramenta e no pedido de aprovação 2FA.
-3. **`execute_tool()` (`src-tauri/src/tools.rs`)**: implemente o braço `match name` que executa a lógica em Rust e retorna `Result<String, String>`.
+### A. Como adicionar uma nova ferramenta para a IA (`tools/mod.rs`)
+Todas as ferramentas do ChatGPT, Gemini e modelos locais são geradas automaticamente a partir de uma única tabela em `src-tauri/src/tools/mod.rs`:
+1. **`tool_catalog()` (`src-tauri/src/tools/mod.rs`)**: adicione um novo `ToolSpec` com `name`, `title`, `description`, `risk` (`ToolRisk::Read` para leitura ou `ToolRisk::Action` para ações que exigem aprovação no modo Revisão) e o schema JSON em `parameters`.
+2. **`format_args_summary()` (`src-tauri/src/tools/mod.rs`)**: adicione uma linha no `match name` para exibir um resumo amigável no chip da ferramenta e no pedido de aprovação 2FA.
+3. **Implementação por domínio**: coloque a função concreta no submódulo correspondente (`tools/web.rs`, `tools/screen.rs`, `tools/files.rs` ou `tools/system.rs`) e conecte no `match name` dentro de `execute_tool_with_policy` em `tools/mod.rs`.
 
 ### B. Como criar um comando entre React e Rust (`main.rs` ↔ `bridge.ts`)
 1. No Rust (`src-tauri/src/main.rs`), crie uma função anotada com `#[tauri::command]` e registre o nome dela dentro de `tauri::generate_handler![...]` no final do arquivo.

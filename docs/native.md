@@ -37,8 +37,8 @@ O comando `tauri build` executa `npm run build` (`tsc --noEmit && vite build`), 
 
 | Artefato | Tamanho (bytes) | Tamanho (MiB) | SHA-256 |
 | :--- | ---: | ---: | :--- |
-| `JARVIS.exe` | 24.504.320 | 23,37 MiB | `4C3DC3F4BAA69529B9084C5CCDB2CDD7B61A59766916696394A8AB0F4639DC9D` |
-| `JARVIS_8.0.0_x64-setup.exe` | 8.333.767 | 7,95 MiB | `E2FD652BFF8A47EADAB549D7007D5415D867B0F59A1E31D39C3489F6CF4E5B08` |
+| `JARVIS.exe` | 26.176.512 | 24,96 MiB | `6C4BBD828F39A683CBB50328AFE5E4C9797896D3E604759714021D44E9ADDD78` |
+| `JARVIS_8.0.0_x64-setup.exe` | 8.669.630 | 8,27 MiB | `CE548203656E079D83B352D9F28F45DD85D3B703DAAB3FADDE110F8206A1FA5E` |
 
 Para validar no PowerShell após baixar do GitHub Releases:
 
@@ -49,7 +49,7 @@ Get-FileHash .\JARVIS_8.0.0_x64-setup.exe -Algorithm SHA256
 ### Validações Executadas nesta Build
 - `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` — passou sem pendências.
 - `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings` — **0 warnings, 0 errors**.
-- `npm test` (`tsc --noEmit && vite build` + `cargo test`) — **34 passed; 0 failed**.
+- `npm test` (`tsc --noEmit && vite build` + `cargo test`) — **38 passed; 0 failed**.
 - **Smoke test real (`JARVIS.exe`)**: processo iniciou e permaneceu ativo (`SMOKE_TEST_ALIVE=True`), com `GET http://127.0.0.1:47821/api/status` respondendo `HTTP 503` (Companion desativado por padrão) e cabeçalhos `X-Frame-Options: DENY` e `Referrer-Policy: no-referrer`.
 
 ---

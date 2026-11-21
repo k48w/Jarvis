@@ -99,6 +99,7 @@ import {
   toggleRoutine,
   deleteRoutine,
   onRoutineTrigger,
+  onScreenCopilotTrigger,
   onCompanionSync,
   onApprovalResolved,
   type SkillItem,
@@ -219,6 +220,8 @@ function providerLabel(cfg: AppConfig): string {
         : `Gemini · ${cfg.gemini_model}`;
     case "chatgpt":
       return `ChatGPT OAuth · ${cfg.chatgpt_model}`;
+    case "local":
+      return `IA Local · ${cfg.local_model}`;
   }
 }
 
@@ -708,9 +711,11 @@ function App() {
     rawText?: string,
     fromMic = false,
     allowFromThinking = false,
+    explicitImage?: { base64: string; mimeType: string } | null,
   ) {
     const baseText = (rawText ?? draft).trim();
-    const pendingImg = rawText === undefined ? attachedImageRef.current : null;
+    const pendingImg =
+      explicitImage ?? (rawText === undefined ? attachedImageRef.current : null);
     const pendingFiles = rawText === undefined ? attachedFilesRef.current : [];
 
     if (!baseText && !pendingImg && pendingFiles.length === 0) return;
@@ -1750,6 +1755,21 @@ function App() {
     );
 
     safeBind(
+      onScreenCopilotTrigger((ev) => {
+        if (!isStreamingRef.current) {
+          notifyMascot(
+            `Co-Pilot de Tela: mudança de ${ev.deltaPct.toFixed(0)}% detectada`,
+            "cheer",
+          );
+          void submitText(ev.prompt, false, false, {
+            base64: ev.imageBase64,
+            mimeType: ev.mimeType,
+          });
+        }
+      }),
+    );
+
+    safeBind(
       onCompanionSync((ev) => {
         const targetId = ev.conversationId;
         if (targetId && targetId !== activeConvIdRef.current) {
@@ -2723,6 +2743,9 @@ function App() {
           onAddMemory={async (content) => {
             await addMemory(content);
             await refreshLists();
+          }}
+          onQuickPrompt={(prompt) => {
+            void submitText(prompt, false);
           }}
           onDeleteMemory={async (id) => {
             await deleteMemory(id);

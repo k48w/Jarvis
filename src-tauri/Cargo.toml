@@ -26,6 +26,8 @@ open = "5"
 sha2 = "0.10"
 getrandom = "0.2"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+lopdf = { version = "0.34", default-features = false, features = ["nom_parser"] }
 
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.39"

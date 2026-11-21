@@ -53,6 +53,7 @@ pub struct AppState {
     pub agent_runs: Mutex<Vec<AgentRunSnapshot>>,
     pub pending_approvals: Mutex<HashMap<String, PendingApprovalEntry>>,
     pub timers: Mutex<HashMap<String, TimerHandle>>,
+    pub mcp_cache: std::sync::Arc<crate::mcp::McpRuntimeCache>,
     pub quitting: AtomicBool,
 }
 
@@ -74,6 +75,7 @@ impl AppState {
             agent_runs: Mutex::new(Vec::new()),
             pending_approvals: Mutex::new(HashMap::new()),
             timers: Mutex::new(HashMap::new()),
+            mcp_cache: std::sync::Arc::new(crate::mcp::McpRuntimeCache::default()),
             quitting: AtomicBool::new(false),
         })
     }

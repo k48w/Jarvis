@@ -8,7 +8,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export type Provider = "chatgpt" | "gemini";
+export type Provider = "chatgpt" | "gemini" | "local";
 export type GeminiAuthMode = "apikey" | "oauth";
 export type PermissionMode = "auto" | "review" | "safe";
 export type TtsEngine = "elevenlabs" | "off";
@@ -23,6 +23,9 @@ export interface AppConfig {
   google_oauth_project_id: string;
   gemini_model: string;
   chatgpt_model: string;
+  local_base_url: string;
+  local_model: string;
+  kb_auto_sync_projects: boolean;
   permission_mode: PermissionMode;
   system_prompt: string;
   tts_engine: TtsEngine;
@@ -363,6 +366,9 @@ export const defaultConfig: AppConfig = {
   google_oauth_project_id: "",
   gemini_model: "gemini-2.5-flash",
   chatgpt_model: "gpt-6.2-sol",
+  local_base_url: "http://127.0.0.1:11434/v1",
+  local_model: "qwen2.5:7b",
+  kb_auto_sync_projects: true,
   permission_mode: "auto",
   system_prompt:
     "Você é J.A.R.V.I.S., um assistente pessoal de desktop para Windows, inteligente, preciso e leal.",
@@ -1873,6 +1879,235 @@ export function onUpdateProgress(
 ): Promise<UnlistenFn> {
   if (isTauri) {
     return listen<UpdateProgressEvent>("jarvis:update-progress", (e) =>
+      handler(e.payload),
+    );
+  }
+  return Promise.resolve(() => {});
+}
+
+// ─── IA Local Offline (Ollama / LM Studio) ────────────────────────────────────
+
+export async function listLocalModels(baseUrl?: string): Promise<string[]> {
+  if (isTauri) {
+    return invoke<string[]>("list_local_models", { baseUrl: baseUrl ?? null });
+  }
+  return ["qwen2.5:7b", "llama3.2:latest", "deepseek-r1:8b"];
+}
+
+export async function reindexAllKnowledge(): Promise<KnowledgeSourceSummary[]> {
+  if (isTauri) return invoke<KnowledgeSourceSummary[]>("reindex_all_knowledge");
+  return simKnowledgeSources;
+}
+
+// ─── Histórico Inteligente da Área de Transferência (Ctrl+C) ──────────────────
+
+export interface ClipboardHistoryEntry {
+  id: string;
+  text: string;
+  preview: string;
+  kind: "code" | "error" | "url" | "text" | string;
+  chars: number;
+  copiedAt: string;
+}
+
+let simClipboardItems: ClipboardHistoryEntry[] = [
+  {
+    id: "clip-sim-1",
+    text: "error[E0425]: cannot find value `config` in this scope",
+    preview: "error[E0425]: cannot find value `config` in this scope",
+    kind: "error",
+    chars: 54,
+    copiedAt: new Date().toISOString(),
+  },
+];
+let simClipboardPaused = false;
+
+export async function listClipboardHistory(): Promise<ClipboardHistoryEntry[]> {
+  if (isTauri) return invoke<ClipboardHistoryEntry[]>("list_clipboard_history");
+  return simClipboardItems;
+}
+
+export async function clearClipboardHistory(): Promise<void> {
+  if (isTauri) return invoke<void>("clear_clipboard_history");
+  simClipboardItems = [];
+}
+
+export async function setClipboardHistoryPaused(paused: boolean): Promise<boolean> {
+  if (isTauri) return invoke<boolean>("set_clipboard_history_paused", { paused });
+  simClipboardPaused = paused;
+  return paused;
+}
+
+export async function getClipboardHistoryPaused(): Promise<boolean> {
+  if (isTauri) return invoke<boolean>("get_clipboard_history_paused");
+  return simClipboardPaused;
+}
+
+export function onClipboardHistoryUpdated(
+  handler: (entry: ClipboardHistoryEntry) => void,
+): Promise<UnlistenFn> {
+  if (isTauri) {
+    return listen<ClipboardHistoryEntry>("jarvis:clipboard-history-updated", (e) =>
+      handler(e.payload),
+    );
+  }
+  return Promise.resolve(() => {});
+}
+
+// ─── Integrações MCP (Model Context Protocol) ─────────────────────────────────
+
+export interface McpServerConfig {
+  id: string;
+  name: string;
+  transport: "stdio" | "http" | string;
+  command: string | null;
+  args: string[];
+  url: string | null;
+  enabled: boolean;
+}
+
+export interface McpServerStatus {
+  server: McpServerConfig;
+  toolCount: number;
+  tools: string[];
+  lastError: string | null;
+}
+
+let simMcpServers: McpServerStatus[] = [];
+
+export async function listMcpServers(): Promise<McpServerStatus[]> {
+  if (isTauri) return invoke<McpServerStatus[]>("list_mcp_servers");
+  return simMcpServers;
+}
+
+export async function saveMcpServer(params: {
+  name: string;
+  transport: "stdio" | "http";
+  command?: string | null;
+  args?: string[];
+  url?: string | null;
+  enabled?: boolean;
+}): Promise<McpServerStatus[]> {
+  if (isTauri) {
+    return invoke<McpServerStatus[]>("save_mcp_server", {
+      name: params.name,
+      transport: params.transport,
+      command: params.command ?? null,
+      args: params.args ?? [],
+      url: params.url ?? null,
+      enabled: params.enabled ?? true,
+    });
+  }
+  const srv: McpServerConfig = {
+    id: `mcp-sim-${Date.now()}`,
+    name: params.name.trim(),
+    transport: params.transport,
+    command: params.command ?? null,
+    args: params.args ?? [],
+    url: params.url ?? null,
+    enabled: params.enabled ?? true,
+  };
+  simMcpServers = [
+    ...simMcpServers,
+    { server: srv, toolCount: 2, tools: ["list_items", "query"], lastError: null },
+  ];
+  return simMcpServers;
+}
+
+export async function toggleMcpServer(
+  id: string,
+  enabled: boolean,
+): Promise<McpServerStatus[]> {
+  if (isTauri) return invoke<McpServerStatus[]>("toggle_mcp_server", { id, enabled });
+  simMcpServers = simMcpServers.map((s) =>
+    s.server.id === id ? { ...s, server: { ...s.server, enabled } } : s,
+  );
+  return simMcpServers;
+}
+
+export async function deleteMcpServer(id: string): Promise<McpServerStatus[]> {
+  if (isTauri) return invoke<McpServerStatus[]>("delete_mcp_server", { id });
+  simMcpServers = simMcpServers.filter((s) => s.server.id !== id);
+  return simMcpServers;
+}
+
+export async function refreshMcpServers(): Promise<McpServerStatus[]> {
+  if (isTauri) return invoke<McpServerStatus[]>("refresh_mcp_servers");
+  return simMcpServers;
+}
+
+// ─── Modo Co-Pilot de Tela (Jogos & Debug) ────────────────────────────────────
+
+export interface ScreenCopilotStatus {
+  active: boolean;
+  targetWindow: string | null;
+  intervalSecs: number;
+  thresholdPct: number;
+  framesChecked: number;
+  triggersSent: number;
+  lastDeltaPct: number;
+}
+
+export interface ScreenCopilotTriggerEvent {
+  targetWindow: string | null;
+  deltaPct: number;
+  imageBase64: string;
+  mimeType: string;
+  prompt: string;
+}
+
+let simCopilotStatus: ScreenCopilotStatus = {
+  active: false,
+  targetWindow: null,
+  intervalSecs: 8,
+  thresholdPct: 8,
+  framesChecked: 0,
+  triggersSent: 0,
+  lastDeltaPct: 0,
+};
+
+export async function startScreenCopilot(params?: {
+  targetWindow?: string | null;
+  intervalSecs?: number;
+  thresholdPct?: number;
+  focusGoal?: string | null;
+}): Promise<ScreenCopilotStatus> {
+  if (isTauri) {
+    return invoke<ScreenCopilotStatus>("start_screen_copilot", {
+      targetWindow: params?.targetWindow ?? null,
+      intervalSecs: params?.intervalSecs ?? 8,
+      thresholdPct: params?.thresholdPct ?? 8,
+      focusGoal: params?.focusGoal ?? null,
+    });
+  }
+  simCopilotStatus = {
+    active: true,
+    targetWindow: params?.targetWindow ?? null,
+    intervalSecs: params?.intervalSecs ?? 8,
+    thresholdPct: params?.thresholdPct ?? 8,
+    framesChecked: 1,
+    triggersSent: 0,
+    lastDeltaPct: 0,
+  };
+  return simCopilotStatus;
+}
+
+export async function stopScreenCopilot(): Promise<ScreenCopilotStatus> {
+  if (isTauri) return invoke<ScreenCopilotStatus>("stop_screen_copilot");
+  simCopilotStatus = { ...simCopilotStatus, active: false };
+  return simCopilotStatus;
+}
+
+export async function getScreenCopilotStatus(): Promise<ScreenCopilotStatus> {
+  if (isTauri) return invoke<ScreenCopilotStatus>("get_screen_copilot_status");
+  return simCopilotStatus;
+}
+
+export function onScreenCopilotTrigger(
+  handler: (ev: ScreenCopilotTriggerEvent) => void,
+): Promise<UnlistenFn> {
+  if (isTauri) {
+    return listen<ScreenCopilotTriggerEvent>("jarvis:copilot-trigger", (e) =>
       handler(e.payload),
     );
   }

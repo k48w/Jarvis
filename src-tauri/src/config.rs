@@ -21,6 +21,7 @@ pub enum Provider {
     #[default]
     Chatgpt,
     Gemini,
+    Local,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -102,6 +103,9 @@ pub struct AppConfig {
     pub google_oauth_project_id: String,
     pub gemini_model: String,
     pub chatgpt_model: String,
+    pub local_base_url: String,
+    pub local_model: String,
+    pub kb_auto_sync_projects: bool,
     pub permission_mode: PermissionMode,
     pub system_prompt: String,
     pub tts_engine: TtsEngine,
@@ -131,6 +135,9 @@ impl Default for AppConfig {
             google_oauth_project_id: String::new(),
             gemini_model: "gemini-2.5-flash".to_string(),
             chatgpt_model: "gpt-6.2-sol".to_string(),
+            local_base_url: "http://127.0.0.1:11434/v1".to_string(),
+            local_model: "qwen2.5:7b".to_string(),
+            kb_auto_sync_projects: true,
             permission_mode: PermissionMode::Auto,
             system_prompt: default_system_prompt(),
             tts_engine: TtsEngine::Elevenlabs,

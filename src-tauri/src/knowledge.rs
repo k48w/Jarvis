@@ -15,23 +15,30 @@
 //!    diretório de dados do aplicativo (`AppState.data_dir`).
 
 use chrono::Utc;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use uuid::Uuid;
 
 const KNOWLEDGE_FILE: &str = "knowledge_base.json";
 const MAX_FILES_PER_SOURCE: usize = 300;
 const MAX_FILE_BYTES: u64 = 512 * 1024;
+const MAX_RICH_DOC_BYTES: u64 = 12 * 1024 * 1024;
 const CHUNK_LINES: usize = 36;
 const CHUNK_OVERLAP: usize = 6;
 const MAX_CHUNKS_PER_SOURCE: usize = 2500;
 
-/// Extensões de texto, documentação e código-fonte suportadas pelo indexador RAG.
+/// Extensões de texto, documentação, planilhas, PDFs e código-fonte suportadas pelo indexador RAG.
 const ALLOWED_EXTENSIONS: &[&str] = &[
     "md",
     "txt",
+    "pdf",
+    "docx",
+    "xlsx",
     "rs",
     "ts",
     "tsx",
@@ -257,7 +264,7 @@ pub fn index_path(
         if new_chunks.len() >= MAX_CHUNKS_PER_SOURCE {
             break;
         }
-        let Ok(raw_text) = fs::read_to_string(&file) else {
+        let Ok(raw_text) = extract_indexable_text(&file) else {
             continue;
         };
         if raw_text.trim().is_empty() {
@@ -304,6 +311,20 @@ pub fn index_path(
     store.chunks.extend(new_chunks);
     save_store(data_dir, &store)?;
     Ok(summary)
+}
+
+/// Reindexa todas as fontes já registradas na Base RAG (útil para sincronizar alterações em projetos).
+pub fn reindex_all_sources(data_dir: &Path) -> Result<Vec<KnowledgeSourceSummary>, String> {
+    let existing = list_sources(data_dir);
+    let mut updated = Vec::new();
+    for src in existing {
+        if Path::new(&src.path).exists() {
+            if let Ok(sum) = index_path(data_dir, &src.path, Some(src.name.clone())) {
+                updated.push(sum);
+            }
+        }
+    }
+    Ok(updated)
 }
 
 /// Pesquisa os trechos mais relevantes na Base de Conhecimento usando BM25 + correspondência exata.
@@ -441,11 +462,175 @@ fn is_blocked_sensitive_path(clean_path: &str) -> bool {
         .any(|seg| matches!(seg, ".ssh" | ".aws" | ".gnupg" | ".azure" | ".kube"))
 }
 
+fn is_rich_document(path: &Path) -> bool {
+    path.extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .is_some_and(|ext| matches!(ext.as_str(), "pdf" | "docx" | "xlsx"))
+}
+
+fn unescape_xml_entities(input: &str) -> String {
+    input
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+}
+
+/// Extrai texto de arquivos comuns UTF-8, além de documentos ricos (`.pdf`, `.docx`, `.xlsx`).
+pub(crate) fn extract_indexable_text(path: &Path) -> Result<String, String> {
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+
+    match ext.as_str() {
+        "pdf" => extract_pdf_text(path),
+        "docx" => extract_docx_text(path),
+        "xlsx" => extract_xlsx_text(path),
+        _ => fs::read_to_string(path).map_err(|e| format!("Falha ao ler arquivo texto: {e}")),
+    }
+}
+
+fn extract_pdf_text(path: &Path) -> Result<String, String> {
+    let doc = lopdf::Document::load(path).map_err(|e| format!("Falha ao abrir PDF: {e}"))?;
+    let pages = doc.get_pages();
+    let mut page_nums: Vec<u32> = pages.keys().copied().collect();
+    page_nums.sort_unstable();
+    let mut out = String::new();
+    for p in page_nums.into_iter().take(180) {
+        if let Ok(text) = doc.extract_text(&[p]) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                out.push_str(&format!("[Página {p}]\n{trimmed}\n\n"));
+            }
+        }
+    }
+    if out.trim().is_empty() {
+        Err("PDF sem texto extraível (pode ser apenas imagem escaneada).".to_string())
+    } else {
+        Ok(out)
+    }
+}
+
+fn extract_docx_text(path: &Path) -> Result<String, String> {
+    let file = fs::File::open(path).map_err(|e| format!("Falha ao abrir DOCX: {e}"))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| format!("DOCX corrompido ou inválido: {e}"))?;
+    let mut doc_xml = archive
+        .by_name("word/document.xml")
+        .map_err(|_| "DOCX sem word/document.xml".to_string())?;
+    let mut xml = String::new();
+    doc_xml
+        .read_to_string(&mut xml)
+        .map_err(|e| format!("Falha ao ler XML do DOCX: {e}"))?;
+
+    let with_breaks = xml
+        .replace("</w:p>", "\n")
+        .replace("<w:br/>", "\n")
+        .replace("<w:tab/>", "\t");
+    static RE_TAGS: OnceLock<Regex> = OnceLock::new();
+    let re = RE_TAGS.get_or_init(|| Regex::new(r"<[^>]+>").expect("valid xml tag regex"));
+    let plain = unescape_xml_entities(&re.replace_all(&with_breaks, ""));
+    let cleaned: Vec<&str> = plain
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+    Ok(cleaned.join("\n"))
+}
+
+fn extract_xlsx_text(path: &Path) -> Result<String, String> {
+    let file = fs::File::open(path).map_err(|e| format!("Falha ao abrir XLSX: {e}"))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| format!("XLSX corrompido ou inválido: {e}"))?;
+
+    static RE_T: OnceLock<Regex> = OnceLock::new();
+    let re_t = RE_T.get_or_init(|| Regex::new(r"(?s)<t[^>]*>(.*?)</t>").expect("valid t regex"));
+    static RE_ROW: OnceLock<Regex> = OnceLock::new();
+    let re_row =
+        RE_ROW.get_or_init(|| Regex::new(r"(?s)<row[^>]*>(.*?)</row>").expect("valid row regex"));
+    static RE_CELL: OnceLock<Regex> = OnceLock::new();
+    let re_cell =
+        RE_CELL.get_or_init(|| Regex::new(r#"(?s)<c([^>]*)>(.*?)</c>"#).expect("valid cell regex"));
+    static RE_VAL: OnceLock<Regex> = OnceLock::new();
+    let re_val =
+        RE_VAL.get_or_init(|| Regex::new(r"(?s)<v[^>]*>(.*?)</v>").expect("valid val regex"));
+
+    // Carrega tabela de strings compartilhadas se existir
+    let mut shared_strings: Vec<String> = Vec::new();
+    if let Ok(mut ss) = archive.by_name("xl/sharedStrings.xml") {
+        let mut xml = String::new();
+        if ss.read_to_string(&mut xml).is_ok() {
+            for si in xml.split("</si>") {
+                let mut cell_txt = String::new();
+                for cap in re_t.captures_iter(si) {
+                    cell_txt.push_str(&unescape_xml_entities(&cap[1]));
+                }
+                if !cell_txt.is_empty() || si.contains("<si") {
+                    shared_strings.push(cell_txt);
+                }
+            }
+        }
+    }
+
+    let mut sheet_names: Vec<String> = (0..archive.len())
+        .filter_map(|i| archive.by_index(i).ok().map(|f| f.name().to_string()))
+        .filter(|n| n.starts_with("xl/worksheets/sheet") && n.ends_with(".xml"))
+        .collect();
+    sheet_names.sort();
+
+    let mut out = String::new();
+    for (idx, sname) in sheet_names.into_iter().take(12).enumerate() {
+        let Ok(mut sheet_file) = archive.by_name(&sname) else {
+            continue;
+        };
+        let mut xml = String::new();
+        if sheet_file.read_to_string(&mut xml).is_err() {
+            continue;
+        }
+        out.push_str(&format!("[Planilha {}]\n", idx + 1));
+        for row_cap in re_row.captures_iter(&xml).take(600) {
+            let mut cols: Vec<String> = Vec::new();
+            for cell_cap in re_cell.captures_iter(&row_cap[1]) {
+                let attrs = &cell_cap[1];
+                let inner = &cell_cap[2];
+                let is_shared = attrs.contains(r#"t="s""#) || attrs.contains("t='s'");
+                if let Some(vcap) = re_val.captures(inner) {
+                    let raw_v = vcap[1].trim();
+                    if is_shared {
+                        if let Ok(si_idx) = raw_v.parse::<usize>() {
+                            if let Some(s) = shared_strings.get(si_idx) {
+                                cols.push(s.trim().to_string());
+                            }
+                        }
+                    } else {
+                        cols.push(unescape_xml_entities(raw_v));
+                    }
+                } else if let Some(tcap) = re_t.captures(inner) {
+                    cols.push(unescape_xml_entities(tcap[1].trim()));
+                }
+            }
+            if !cols.is_empty() {
+                out.push_str(&cols.join(" | "));
+                out.push('\n');
+            }
+        }
+        out.push('\n');
+    }
+    Ok(out)
+}
+
 fn is_indexable_file(path: &Path) -> bool {
     let Ok(meta) = fs::metadata(path) else {
         return false;
     };
-    if !meta.is_file() || meta.len() == 0 || meta.len() > MAX_FILE_BYTES {
+    let size_limit = if is_rich_document(path) {
+        MAX_RICH_DOC_BYTES
+    } else {
+        MAX_FILE_BYTES
+    };
+    if !meta.is_file() || meta.len() == 0 || meta.len() > size_limit {
         return false;
     }
     let clean = strip_verbatim_prefix(&path.to_string_lossy());
@@ -622,6 +807,60 @@ mod tests {
         // Remover a fonte limpa a lista e os chunks
         assert!(remove_source(&data_dir, &summary.id).unwrap());
         assert!(list_sources(&data_dir).is_empty());
+
+        let _ = fs::remove_dir_all(&data_dir);
+    }
+
+    #[test]
+    fn knowledge_base_extracts_docx_and_xlsx_documents() {
+        use std::io::Write;
+        let data_dir =
+            std::env::temp_dir().join(format!("jarvis-kb-rich-{}", Uuid::new_v4().simple()));
+        let docs_dir = data_dir.join("office_docs");
+        fs::create_dir_all(&docs_dir).unwrap();
+
+        // Cria um .docx mínimo válido
+        {
+            let f = fs::File::create(docs_dir.join("relatorio.docx")).unwrap();
+            let mut zw = zip::ZipWriter::new(f);
+            let opts = zip::write::SimpleFileOptions::default();
+            zw.start_file("word/document.xml", opts).unwrap();
+            zw.write_all(
+                br#"<w:document><w:body><w:p><w:r><w:t>Meta anual de receita: R$ 450.000 em AuroraCloud.</w:t></w:r></w:p></w:body></w:document>"#,
+            )
+            .unwrap();
+            zw.finish().unwrap();
+        }
+
+        // Cria um .xlsx mínimo válido com sharedStrings e sheet1
+        {
+            let f = fs::File::create(docs_dir.join("financeiro.xlsx")).unwrap();
+            let mut zw = zip::ZipWriter::new(f);
+            let opts = zip::write::SimpleFileOptions::default();
+            zw.start_file("xl/sharedStrings.xml", opts).unwrap();
+            zw.write_all(br#"<sst><si><t>Produto</t></si><si><t>JarvisPro</t></si></sst>"#)
+                .unwrap();
+            zw.start_file("xl/worksheets/sheet1.xml", opts).unwrap();
+            zw.write_all(
+                br#"<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1"><v>9988</v></c></row></sheetData></worksheet>"#,
+            )
+            .unwrap();
+            zw.finish().unwrap();
+        }
+
+        let summary = index_path(&data_dir, &docs_dir.to_string_lossy(), None).unwrap();
+        assert_eq!(summary.file_count, 2);
+
+        let docx_hits = search_knowledge(&data_dir, "AuroraCloud receita", 5, None);
+        assert!(!docx_hits.is_empty());
+        assert!(docx_hits[0].snippet.contains("AuroraCloud"));
+
+        let xlsx_hits = search_knowledge(&data_dir, "JarvisPro 9988", 5, None);
+        assert!(!xlsx_hits.is_empty());
+        assert!(xlsx_hits[0].snippet.contains("JarvisPro"));
+
+        let synced = reindex_all_sources(&data_dir).unwrap();
+        assert_eq!(synced.len(), 1);
 
         let _ = fs::remove_dir_all(&data_dir);
     }
