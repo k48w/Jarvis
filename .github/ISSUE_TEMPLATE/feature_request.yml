@@ -1,0 +1,12 @@
+name: ✨ Sugestão de Recurso
+description: Sugira uma nova ferramenta, integração ou melhoria visual para o J.A.R.V.I.S.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: Qual recurso você gostaria de ver no J.A.R.V.I.S.?
+      description: Explique como esse recurso funcionaria e por que seria útil.
+    validations:
+      required: true

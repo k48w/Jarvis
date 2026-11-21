@@ -1,0 +1,25 @@
+name: 🐛 Reportar Bug
+description: Relate um problema ou comportamento inesperado no J.A.R.V.I.S. V8.0
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: O que aconteceu?
+      description: Descreva de forma clara o bug encontrado.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Passos para reproduzir
+      placeholder: |
+        1. Abra o J.A.R.V.I.S.
+        2. Clique em '...'
+        3. Veja o erro
+  - type: input
+    id: os
+    attributes:
+      label: Versão do Windows
+      placeholder: "Ex.: Windows 11 24H2 x64"
