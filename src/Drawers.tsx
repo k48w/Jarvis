@@ -98,6 +98,7 @@ export function HistoryDrawer({
   const [projectErr, setProjectErr] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [convSearch, setConvSearch] = useState("");
 
   async function submitMemory(e: React.FormEvent) {
     e.preventDefault();
@@ -167,8 +168,17 @@ export function HistoryDrawer({
     URL.revokeObjectURL(url);
   }
 
+  const searchNeedle = convSearch.trim().toLowerCase();
+  const filteredConvs = searchNeedle
+    ? conversations.filter(
+        (c) =>
+          c.title.toLowerCase().includes(searchNeedle) ||
+          c.preview.toLowerCase().includes(searchNeedle),
+      )
+    : conversations;
+
   const projectIds = new Set(projects.map((p) => p.id));
-  const recentConvs = conversations.filter(
+  const recentConvs = filteredConvs.filter(
     (c) => !c.project_id || !projectIds.has(c.project_id),
   );
 
@@ -316,12 +326,22 @@ export function HistoryDrawer({
 
           {projectErr && <small className="warn-tag">{projectErr}</small>}
 
+          {conversations.length > 2 && (
+            <input
+              type="search"
+              value={convSearch}
+              placeholder="Filtrar conversas por título ou conteúdo…"
+              aria-label="Filtrar conversas"
+              onChange={(e) => setConvSearch(e.target.value)}
+            />
+          )}
+
           <div className="codex-sidebar-lists">
             {projects.length > 0 && (
               <div className="project-section">
                 <div className="section-kicker">Projetos</div>
                 {projects.map((proj) => {
-                  const projConvs = conversations.filter((c) => c.project_id === proj.id);
+                  const projConvs = filteredConvs.filter((c) => c.project_id === proj.id);
                   return (
                     <div key={proj.id} className="project-group">
                       <div className="project-row" title={proj.path}>
