@@ -1,4 +1,4 @@
-import { Component, useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Aperture,
@@ -170,28 +170,6 @@ function saveLs(key: string, value: string) {
     localStorage.setItem(key, value);
   } catch {
     /* ignore */
-  }
-}
-
-class StageBoundary extends Component<
-  { children: ReactNode },
-  { failed: boolean }
-> {
-  state = { failed: false };
-  static getDerivedStateFromError() {
-    return { failed: true };
-  }
-  render() {
-    return this.state.failed ? (
-      <div className="fallback" role="alert">
-        O núcleo precisa de WebGL.{" "}
-        <button onClick={() => this.setState({ failed: false })}>
-          Tentar novamente
-        </button>
-      </div>
-    ) : (
-      this.props.children
-    );
   }
 }
 
@@ -1753,7 +1731,7 @@ function App() {
     <main
       data-state={mode}
       data-theme={theme}
-      className={immersive ? "immersive" : ""}
+      className={`${immersive ? "immersive" : ""} ${!isTauri ? "web-preview" : ""}`}
       onDragOver={(e) => {
         if (e.dataTransfer?.types?.includes("Files")) {
           e.preventDefault();
@@ -2012,6 +1990,13 @@ function App() {
         </nav>
       </header>
 
+      {!isTauri && !immersive && (
+        <aside className="web-preview-banner" aria-label="Sobre a demonstração">
+          <strong>Demonstração visual</strong>
+          <span>IA, voz e controle do Windows exigem o aplicativo desktop configurado.</span>
+          <a href="https://github.com/k48w/Jarvis/releases/tag/v8.0.0" target="_blank" rel="noreferrer">Baixar para Windows</a>
+        </aside>
+      )}
       <div className="workspace">
         <section
           className={
@@ -2021,15 +2006,13 @@ function App() {
           }
           aria-label="Núcleo de plasma"
         >
-          <StageBoundary>
-            <Stage
+          <Stage
               state={mode}
               quality={quality}
               theme={theme}
               reduced={reduced}
               audioLevel={audioLevelRef}
-            />
-          </StageBoundary>
+          />
           <HudOverlay state={mode} immersive={immersive || workspaceView !== "core"} />
           {(workspaceView === "core" || immersive) && (
             <div className="core-caption">
@@ -2369,7 +2352,7 @@ function App() {
                         ? ` · Projeto: ${projects.find((p) => p.id === activeProjectId)?.name ?? "Vinculado"}`
                         : ""
                     } · ${permissionLabels[config.permission_mode]}`
-                  : "Prévia web · Abra o app desktop para IA e controle do Windows"}
+                  : "Demonstração visual · IA e ações disponíveis no aplicativo desktop"}
               </small>
             </div>
           </section>
