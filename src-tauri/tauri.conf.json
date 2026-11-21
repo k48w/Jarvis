@@ -13,7 +13,7 @@
   "app": {
     "windows": [{
       "label": "main",
-      "title": "J.A.R.V.I.S. — The Singularity Edition",
+      "title": "Jarvis",
       "width": 1600,
       "height": 900,
       "preventOverflow": true,
@@ -31,7 +31,7 @@
     "active": true,
     "targets": ["nsis"],
     "icon": ["icons/icon.ico"],
-    "shortDescription": "J.A.R.V.I.S. cinematic desktop experience",
+    "shortDescription": "Assistente desktop nativo para Windows",
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper" },
       "nsis": { "installMode": "currentUser", "installerIcon": "icons/icon.ico" }

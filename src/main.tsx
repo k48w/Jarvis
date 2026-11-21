@@ -1863,8 +1863,7 @@ function App() {
         <div className="brand-group">
           <div className="brand">
             <Aperture />
-            <strong>J.A.R.V.I.S.</strong>
-            <small>V8.0</small>
+            <strong>JARVIS</strong>
           </div>
           {!isTauri && !immersive && (
             <button

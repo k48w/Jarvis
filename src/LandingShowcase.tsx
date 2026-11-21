@@ -35,26 +35,26 @@ import type { CoreState } from "./rhythm";
 const GALLERY_SLIDES = [
   {
     id: "cockpit",
-    title: "Cockpit Principal 3D & HUD Orbital",
-    subtitle: "Esfera de plasma GLSL reativa à voz, retícula giroscópica e resposta Markdown ao vivo.",
+    title: "Interface principal e núcleo 3D",
+    subtitle: "Esfera em WebGL reativa à voz, retícula discreta e respostas em Markdown ao vivo.",
     img: "/og-cover.png",
   },
   {
     id: "browser",
-    title: "Navegador Chromium 60fps Dividido (Estilo Codex)",
-    subtitle: "O próprio J.A.R.V.I.S. abre sites ao lado da conversa, inspeciona elementos e clica/digita via CDP.",
+    title: "Navegador embutido lado a lado",
+    subtitle: "WebView2 nativo ao lado da conversa para abrir sites, ler páginas e interagir quando você pedir.",
     img: "/gallery-browser.png",
   },
   {
     id: "agents",
-    title: "Central de Subagentes Paralelos",
-    subtitle: "Aba contextual dinâmica que surge quando o J.A.R.V.I.S. delega pesquisas em segundo plano.",
+    title: "Painel de agentes em paralelo",
+    subtitle: "Rode até 3 tarefas em segundo plano e ouça o resumo direto no chat assim que concluírem.",
     img: "/gallery-agents.png",
   },
   {
     id: "awakening",
-    title: "Modo Imersivo & Despertar do Reator",
-    subtitle: "Visualização pura em tela cheia (F11) do núcleo de plasma em 60 quadros por segundo.",
+    title: "Modo tela cheia",
+    subtitle: "Visualização limpa em tela cheia (F11) sem distrações enquanto conversa por voz.",
     img: "/gallery-awakening.png",
   },
 ];
@@ -321,14 +321,14 @@ export function LandingShowcase({
       <header className="lp-navbar">
         <div className="lp-nav-brand">
           <img src="/app-icon.jpg" alt="" className="lp-app-emblem" />
-          <strong>J.A.R.V.I.S.</strong>
-          <span className="lp-version-tag">V8.0</span>
+          <strong>Jarvis</strong>
+          <span className="lp-version-tag">Windows</span>
         </div>
 
         <nav className="lp-nav-links" aria-label="Navegação do site">
-          <a href="#pilares">Engenharia</a>
-          <a href="#recursos">Recursos</a>
-          <a href="#comparativo">Arquitetura</a>
+          <a href="#pilares">Recursos</a>
+          <a href="#recursos">Detalhes</a>
+          <a href="#comparativo">Comparativo</a>
           <a href="#download">Download</a>
         </nav>
 
@@ -372,19 +372,19 @@ export function LandingShowcase({
         <div className="lp-hero-copy">
           <div className="lp-kicker-pill">
             <span className="lp-live-dot" />
-            <span>ASSISTENTE PESSOAL · WINDOWS 10 E 11</span>
+            <span>WINDOWS 10 / 11 · TAURI 2 + RUST</span>
           </div>
 
           <h1>
-            Seu assistente de voz para
+            Um assistente de desktop para
             <br />
-            <span>jogar, navegar e programar no Windows.</span>
+            <span>jogar, programar e controlar o Windows.</span>
           </h1>
 
           <p className="lp-hero-lead">
-            Converse com o Jarvis, peça ajuda com o que aparece na tela e acompanhe
-            suas tarefas em uma única interface. Ative por voz com <code>&ldquo;Ei, Jarvis&rdquo;</code>
-            e mantenha seu assistente por perto enquanto usa o Windows.
+            Fale por voz com <code>&ldquo;Ei, Jarvis&rdquo;</code>, capture qualquer janela ou jogo,
+            rode comandos no terminal ao vivo, controle o Git e agende rotinas — tudo direto no PC,
+            sem depender de abas no navegador.
           </p>
 
           <div className="lp-hero-cta-row">
@@ -397,7 +397,7 @@ export function LandingShowcase({
               <Download />
               <div>
                 <strong>Baixar para Windows x64</strong>
-                <small>JARVIS_8.0.0_x64-setup.exe · ~5 MB</small>
+                <small>Instalador .exe · ~7.7 MB</small>
               </div>
             </a>
 
@@ -408,8 +408,8 @@ export function LandingShowcase({
             >
               <Sparkles />
               <div>
-                <strong>Explorar demonstração visual</strong>
-                <small>Conheça a interface no navegador</small>
+                <strong>Abrir prévia no navegador</strong>
+                <small>Testar a interface sem instalar</small>
               </div>
               <ArrowRight />
             </button>
@@ -749,7 +749,7 @@ export function LandingShowcase({
                   <div className="lp-split-page">
                     <div className="lp-split-repo">
                       <strong>k48w/Jarvis</strong>
-                      <span>J.A.R.V.I.S. V8.0 — The Singularity Edition (Tauri 2 + Rust + Three.js)</span>
+                      <span>Assistente desktop nativo para Windows (Tauri 2 + Rust + React)</span>
                     </div>
                     <div className="lp-split-repo">
                       <strong>tauri-apps/tauri</strong>
@@ -997,58 +997,58 @@ export function LandingShowcase({
       <section id="comparativo" className="lp-section">
         <div className="lp-section-head">
           <span className="lp-eyebrow">COMPARATIVO TÉCNICO</span>
-          <h2>Conheça as integrações do J.A.R.V.I.S. V8.0</h2>
+          <h2>O que o Jarvis faz diferente</h2>
         </div>
 
         <div className="lp-table-wrap">
           <table className="lp-compare-table">
             <thead>
               <tr>
-                <th>Capacidade</th>
-                <th className="highlight">J.A.R.V.I.S. V8.0 (Singularity)</th>
-                <th>Chats Web / Apps Electron Comuns</th>
+                <th>Recurso</th>
+                <th className="highlight">Jarvis (Desktop)</th>
+                <th>Chats Web / Apps Electron</th>
               </tr>
             </thead>
             <tbody>
               <tr>
                 <td>Visão de Jogos &amp; Janelas</td>
                 <td className="highlight">
-                  <strong>PrintWindow em 2º plano + DXGI</strong> (vê atrás do navegador sem roubar foco)
+                  <strong>PrintWindow + DXGI nativos</strong> (captura janelas específicas em segundo plano)
                 </td>
-                <td>Print manual ou captura só o que está na frente</td>
+                <td>Print manual ou só a janela em foco</td>
               </tr>
               <tr>
                 <td>Microfone &amp; Wake Word</td>
                 <td className="highlight">
-                  <strong>Rust Win32 <code>waveIn</code> nativo</strong> (sujeito às permissões de microfone do Windows)
+                  <strong>Win32 <code>waveIn</code> em Rust</strong> com VAD local (zero envio no silêncio)
                 </td>
-                <td>Depende do navegador / falha em WebViews</td>
+                <td>Depende do navegador / sem wake word nativo</td>
+              </tr>
+              <tr>
+                <td>Terminal &amp; Git Nativo</td>
+                <td className="highlight">
+                  <strong>Terminal em streaming + Git status/diff/commit</strong> e undo em 1 clique
+                </td>
+                <td>Copiar e colar comandos manualmente</td>
+              </tr>
+              <tr>
+                <td>Skills &amp; Rotinas</td>
+                <td className="highlight">
+                  <strong>Macros <code>/comando</code> + agendador em background</strong> (diário ou por intervalo)
+                </td>
+                <td>Sem automação recorrente no desktop</td>
               </tr>
               <tr>
                 <td>Navegador Integrado</td>
                 <td className="highlight">
-                  <strong>Child WebView2 60fps + 8 ferramentas CDP</strong> em tela dividida
+                  <strong>WebView2 lado a lado</strong> com controle via CDP quando você pedir
                 </td>
-                <td>Apenas busca textual simples sem interação</td>
-              </tr>
-              <tr>
-                <td>Presença no Desktop</td>
-                <td className="highlight">
-                  <strong>Mascote animado global Always-On-Top</strong> + Atalho <code>Alt+Space</code>
-                </td>
-                <td>Preso dentro de uma aba ou janela comum</td>
-              </tr>
-              <tr>
-                <td>Edição de Código &amp; Arquivos</td>
-                <td className="highlight">
-                  <strong>Projetos vinculados + Diff colorido + Desfazer em 1 clique</strong>
-                </td>
-                <td>Copiar e colar manualmente</td>
+                <td>Apenas busca textual sem interação</td>
               </tr>
               <tr>
                 <td>Tamanho do Instalador</td>
                 <td className="highlight">
-                  <strong>~5.0 MB (Tauri 2 + Rust Nativo)</strong>
+                  <strong>~7.7 MB (Tauri 2 + Rust)</strong>
                 </td>
                 <td>150 MB – 300 MB (Electron)</td>
               </tr>
@@ -1126,11 +1126,11 @@ export function LandingShowcase({
       <section id="download" className="lp-section lp-download-section">
         <div className="lp-download-card">
           <div className="lp-download-copy">
-            <span className="lp-eyebrow">PRONTO PARA INSTALAR OU COMPILAR</span>
-            <h2>Coloque o J.A.R.V.I.S. V8.0 no seu Windows hoje</h2>
+            <span className="lp-eyebrow">DOWNLOAD &amp; CÓDIGO-FONTE</span>
+            <h2>Instale o Jarvis no seu Windows</h2>
             <p>
-              Baixe o instalador oficial pronto para Windows 10/11 x64, compile a partir do
-              código-fonte em Rust ou experimente o simulador 3D interativo agora mesmo.
+              Baixe o instalador para Windows 10/11 x64, compile direto do repositório em Rust
+              ou abra a prévia da interface no navegador.
             </p>
 
             <div className="lp-hero-cta-row">
@@ -1143,7 +1143,7 @@ export function LandingShowcase({
                 <Download />
                 <div>
                   <strong>Baixar Instalador Windows (.exe)</strong>
-                  <small>GitHub Releases · v8.0.0</small>
+                  <small>GitHub Releases · Windows x64</small>
                 </div>
               </a>
 
@@ -1154,8 +1154,8 @@ export function LandingShowcase({
               >
                 <Play />
                 <div>
-                  <strong>Testar Simulador 3D Agora</strong>
-                  <small>Prévia visual; IA disponível no app desktop</small>
+                  <strong>Abrir prévia no navegador</strong>
+                  <small>Interface visual; IA e voz no app desktop</small>
                 </div>
               </button>
 
@@ -1193,23 +1193,23 @@ npm run tauri -- build`}</code>
       <footer className="lp-footer">
         <div className="lp-nav-brand">
           <img src="/app-icon.jpg" alt="" className="lp-app-emblem" />
-          <strong>J.A.R.V.I.S. V8.0 — The Singularity Edition</strong>
+          <strong>Jarvis</strong>
         </div>
         <div className="lp-footer-links">
           <a href={GITHUB_REPO_URL} target="_blank" rel="noreferrer">
-            GitHub (k48w/Jarvis)
+            GitHub
           </a>
           <a href={GITHUB_RELEASES_PAGE} target="_blank" rel="noreferrer">
-            Releases (v8.0.0)
+            Releases
           </a>
           <a href={GITHUB_RELEASE_URL} target="_blank" rel="noreferrer">
-            Baixar .exe Direto
+            Baixar .exe
           </a>
           <button type="button" className="lp-link-btn" onClick={onEnterSimulator}>
-            Simulador 3D Web
+            Prévia Web
           </button>
         </div>
-        <small>MIT License · Tauri 2 + Rust + React 19 + Three.js</small>
+        <small>MIT · Tauri 2, Rust, React e Three.js</small>
       </footer>
     </div>
   );
