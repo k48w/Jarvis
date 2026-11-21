@@ -565,6 +565,21 @@ pub fn tool_catalog() -> Vec<ToolSpec> {
                 "required": ["path", "message"]
             }),
         },
+        ToolSpec {
+            name: "run_terminal",
+            title: "Executar no Terminal ao Vivo",
+            description: "Executa um comando PowerShell com streaming ao vivo na aba Terminal (ideal para npm test, cargo build, pytest, scripts ou builds de até 180s).",
+            risk: ToolRisk::Action,
+            parameters: || json!({
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "Comando PowerShell a executar." },
+                    "cwd": { "type": "string", "description": "Pasta de trabalho opcional." },
+                    "timeout_secs": { "type": "integer", "description": "Tempo máximo em segundos (padrão 60, máx 180)." }
+                },
+                "required": ["command"]
+            }),
+        },
     ]
 }
 
@@ -702,6 +717,7 @@ pub fn format_args_summary(name: &str, args: &Value) -> String {
         ),
         "git_status" | "git_diff" | "git_log" => args["path"].as_str().unwrap_or("").to_string(),
         "git_commit" => args["message"].as_str().unwrap_or("").chars().take(48).collect(),
+        "run_terminal" => args["command"].as_str().unwrap_or("").chars().take(54).collect(),
         _ => String::new(),
     }
 }
@@ -1901,6 +1917,14 @@ pub async fn execute_tool_with_policy(
                 .await
                 .map_err(|e| format!("Falha ao executar git commit: {e}"))
                 .and_then(|r| r)
+        }
+        "run_terminal" => {
+            use tauri::Manager;
+            let cmd = args["command"].as_str().unwrap_or("");
+            let cwd = args["cwd"].as_str();
+            let timeout = args["timeout_secs"].as_u64().unwrap_or(60);
+            let ctrl = app.state::<Arc<crate::terminal::TerminalController>>();
+            crate::terminal::run_and_collect_streaming(app, &ctrl, cmd, cwd, timeout).await
         }
         _ => Err(format!("Ferramenta não implementada: {name}")),
     };

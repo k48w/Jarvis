@@ -1378,3 +1378,61 @@ export async function appendAssistantNote(
     tool_events: [],
   };
 }
+
+export interface TerminalEvent {
+  id: string;
+  kind: "start" | "stdout" | "stderr" | "exit";
+  command?: string;
+  cwd?: string;
+  line?: string;
+  exitCode?: number;
+  cancelled?: boolean;
+}
+
+export async function runTerminalCommand(
+  command: string,
+  cwd?: string,
+): Promise<string> {
+  if (isTauri) {
+    return invoke<string>("run_terminal_command", { command, cwd });
+  }
+  const id = `sim-${Date.now()}`;
+  emitBrowserEvent("jarvis:terminal-event", {
+    id,
+    kind: "start",
+    command,
+    cwd: cwd ?? "C:\\Workspace\\Jarvis",
+  });
+  window.setTimeout(() => {
+    emitBrowserEvent("jarvis:terminal-event", {
+      id,
+      kind: "stdout",
+      line: `[Simulador Web] Executado: ${command}`,
+    });
+    emitBrowserEvent("jarvis:terminal-event", {
+      id,
+      kind: "exit",
+      exitCode: 0,
+      cancelled: false,
+    });
+  }, 260);
+  return id;
+}
+
+export async function cancelTerminalCommand(id: string): Promise<boolean> {
+  if (isTauri) {
+    return invoke<boolean>("cancel_terminal_command", { id });
+  }
+  return true;
+}
+
+export function onTerminalEvent(
+  handler: (ev: TerminalEvent) => void,
+): Promise<UnlistenFn> {
+  if (isTauri) {
+    return listen<TerminalEvent>("jarvis:terminal-event", (e) =>
+      handler(e.payload),
+    );
+  }
+  return subscribeBrowser("jarvis:terminal-event", handler);
+}

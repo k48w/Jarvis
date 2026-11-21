@@ -8,6 +8,7 @@ mod mic;
 mod oauth;
 mod state;
 mod storage;
+mod terminal;
 mod tools;
 mod tts;
 
@@ -1214,6 +1215,24 @@ async fn append_assistant_note(
     Ok(msg)
 }
 
+#[tauri::command]
+async fn run_terminal_command(
+    app: AppHandle,
+    ctrl: State<'_, Arc<terminal::TerminalController>>,
+    command: String,
+    cwd: Option<String>,
+) -> Result<String, String> {
+    terminal::start_streaming_command(&app, &ctrl, command, cwd).await
+}
+
+#[tauri::command]
+async fn cancel_terminal_command(
+    ctrl: State<'_, Arc<terminal::TerminalController>>,
+    id: String,
+) -> Result<bool, String> {
+    Ok(ctrl.cancel(&id).await)
+}
+
 fn setup_tray(app: &AppHandle, state: Arc<AppState>) -> tauri::Result<()> {
     let toggle_item =
         MenuItem::with_id(app, "toggle", "Mostrar / Ocultar J.A.R.V.I.S.", true, None::<&str>)?;
@@ -1299,6 +1318,7 @@ fn main() {
 
             app.manage(Arc::clone(&app_state));
             app.manage(Arc::new(mic::MicController::default()));
+            app.manage(Arc::new(terminal::TerminalController::default()));
 
             #[cfg(windows)]
             if let Some(main_win) = app.get_webview_window("main") {
@@ -1420,6 +1440,8 @@ fn main() {
             get_git_repo_status,
             git_commit_workspace,
             append_assistant_note,
+            run_terminal_command,
+            cancel_terminal_command,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run the JARVIS desktop application");

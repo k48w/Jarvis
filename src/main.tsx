@@ -23,6 +23,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Square,
+  Terminal,
   Upload,
   Volume2,
   VolumeX,
@@ -36,6 +37,7 @@ import { AgentsView, type AgentRun } from "./AgentsView";
 import { BrowserView } from "./BrowserView";
 import { CommandPalette } from "./CommandPalette";
 import { DiffView, type FileDiffRecord } from "./DiffView";
+import { TerminalView, type TerminalSession } from "./TerminalView";
 import { LandingShowcase } from "./LandingShowcase";
 import { MascotBuddy, MascotWindow } from "./MascotBuddy";
 import { AudioEngine } from "./audio";
@@ -73,6 +75,9 @@ import {
   onAgentSpawned,
   onAgentCompletedSummary,
   appendAssistantNote,
+  runTerminalCommand,
+  cancelTerminalCommand,
+  onTerminalEvent,
   onBrowserPanel,
   onChatEvent,
   onFileDiff,
@@ -326,10 +331,13 @@ function App() {
   const [audioError, setAudioError] = useState(false);
 
   const [workspaceView, setWorkspaceView] = useState<
-    "core" | "agents" | "browser" | "diff"
+    "core" | "agents" | "browser" | "diff" | "terminal"
   >("core");
   const [agents, setAgents] = useState<AgentRun[]>([]);
   const [fileDiffs, setFileDiffs] = useState<FileDiffRecord[]>([]);
+  const [terminalSessions, setTerminalSessions] = useState<TerminalSession[]>(
+    [],
+  );
   const [browserSessionOpen, setBrowserSessionOpen] = useState(false);
   const [browserUrl, setBrowserUrl] = useState("");
   const [browserTitle, setBrowserTitle] = useState("");
@@ -1356,6 +1364,7 @@ function App() {
     let unBrowserPanel: (() => void) | undefined;
     let unScreenPulse: (() => void) | undefined;
     let unFileDiff: (() => void) | undefined;
+    let unTerminal: (() => void) | undefined;
     let pulseTimer = 0;
 
     void onChatEvent((ev) => {
@@ -1636,6 +1645,44 @@ function App() {
       unFileDiff = fn;
     });
 
+    void onTerminalEvent((ev) => {
+      setTerminalSessions((prev) => {
+        if (ev.kind === "start") {
+          const next: TerminalSession = {
+            id: ev.id,
+            command: ev.command ?? "",
+            cwd: ev.cwd ?? "",
+            running: true,
+            lines: [],
+          };
+          return [...prev.slice(-19), next];
+        }
+        return prev.map((s) => {
+          if (s.id !== ev.id) return s;
+          if (ev.kind === "stdout" || ev.kind === "stderr") {
+            return {
+              ...s,
+              lines: [
+                ...s.lines.slice(-400),
+                { kind: ev.kind, text: ev.line ?? "" },
+              ],
+            };
+          }
+          if (ev.kind === "exit") {
+            return {
+              ...s,
+              running: false,
+              exitCode: ev.exitCode,
+              cancelled: ev.cancelled,
+            };
+          }
+          return s;
+        });
+      });
+    }).then((fn) => {
+      unTerminal = fn;
+    });
+
     return () => {
       unChat?.();
       unApprove?.();
@@ -1646,6 +1693,7 @@ function App() {
       unBrowserPanel?.();
       unScreenPulse?.();
       unFileDiff?.();
+      unTerminal?.();
       window.clearTimeout(pulseTimer);
     };
   }, []);
@@ -1858,7 +1906,7 @@ function App() {
           )}
         </div>
 
-        {!immersive && (agents.length > 0 || browserSessionOpen || fileDiffs.length > 0) && (
+        {!immersive && (agents.length > 0 || browserSessionOpen || fileDiffs.length > 0 || terminalSessions.length > 0 || workspaceView === "terminal") && (
           <div className="workspace-dock contextual-dock" role="tablist" aria-label="Áreas de trabalho">
             <button
               type="button"
@@ -1870,6 +1918,21 @@ function App() {
               <Sparkles />
               <span>Núcleo</span>
             </button>
+            {(terminalSessions.length > 0 || workspaceView === "terminal") && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={workspaceView === "terminal"}
+                className={workspaceView === "terminal" ? "dock-tab active" : "dock-tab"}
+                onClick={() => setWorkspaceView("terminal")}
+              >
+                <Terminal />
+                <span>Terminal</span>
+                {terminalSessions.some((s) => s.running) && (
+                  <i className="dock-dot" />
+                )}
+              </button>
+            )}
             {agents.length > 0 && (
               <button
                 type="button"
@@ -1938,6 +2001,18 @@ function App() {
               onClick={() => void startNewConversation()}
             >
               <Plus />
+            </button>
+          )}
+          {!immersive && (
+            <button
+              aria-label="Terminal ao Vivo"
+              title="Terminal ao Vivo"
+              className={workspaceView === "terminal" ? "active" : undefined}
+              onClick={() =>
+                setWorkspaceView((v) => (v === "terminal" ? "core" : "terminal"))
+              }
+            >
+              <Terminal />
             </button>
           )}
           {!immersive && (
@@ -2071,6 +2146,24 @@ function App() {
               setFileDiffs([]);
               setWorkspaceView("core");
             }}
+          />
+        )}
+
+        {!immersive && workspaceView === "terminal" && (
+          <TerminalView
+            sessions={terminalSessions}
+            projectPath={
+              activeProjectId
+                ? (projects.find((p) => p.id === activeProjectId)?.path ?? null)
+                : null
+            }
+            onRun={async (command, cwd) => {
+              await runTerminalCommand(command, cwd);
+            }}
+            onCancel={async (id) => {
+              await cancelTerminalCommand(id);
+            }}
+            onClear={() => setTerminalSessions([])}
           />
         )}
 
